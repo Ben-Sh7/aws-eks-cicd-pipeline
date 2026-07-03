@@ -193,7 +193,9 @@ sudo cat /var/lib/jenkins/secrets/initialAdminPassword
    - SCM: `Git`
    - Repository URL: `https://github.com/your-username/devops-task-manager.git`
    - Branch: `*/main`
-6. Save
+6. Under Build Triggers section:
+   - Check: `GitHub hook trigger for GITScm polling`
+7. Save
 
 ### 8. Configure AWS Credentials in Jenkins
 
