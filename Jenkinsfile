@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         AWS_REGION = 'us-east-1'
-        ECR_REGISTRY = '123456789.dkr.ecr.us-east-1.amazonaws.com'
+        ECR_REGISTRY = '688035105164.dkr.ecr.us-east-1.amazonaws.com'
         BACKEND_REPO = 'devops-task-manager-backend'
         FRONTEND_REPO = 'devops-task-manager-frontend'
         BUILD_TAG = "${BUILD_NUMBER}-${new Date().format('yyyyMMddHHmmss')}"
@@ -13,7 +13,7 @@ pipeline {
     }
 
     parameters {
-        string(name: 'AWS_ACCOUNT_ID', defaultValue: '123456789', description: 'AWS Account ID')
+        string(name: 'AWS_ACCOUNT_ID', defaultValue: '688035105164', description: 'AWS Account ID')
         string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS Region')
     }
 
