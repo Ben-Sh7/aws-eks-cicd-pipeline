@@ -4,21 +4,156 @@
     <meta charset="UTF-8">
     <title>מערכת ניהול משימות</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; text-align: center; }
-        input, button { padding: 10px; font-size: 16px; margin: 5px; }
-        ul { list-style-type: none; padding: 0; }
-        li { background: #eee; margin: 5px 0; padding: 10px; border-radius: 5px; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 32px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #999;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        input {
+            flex: 1;
+            padding: 15px;
+            font-size: 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        input:focus {
+            border-color: #667eea;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+
+        li {
+            background: linear-gradient(135deg, #f5f7fa 0%, #f0f3f7 100%);
+            margin: 10px 0;
+            padding: 15px 20px;
+            border-radius: 10px;
+            font-size: 16px;
+            color: #333;
+            border-right: 4px solid #667eea;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+        }
+
+        li:before {
+            content: "✓ ";
+            color: #667eea;
+            font-weight: bold;
+            margin-right: 10px;
+            font-size: 18px;
+        }
+
+        li:hover {
+            background: linear-gradient(135deg, #eff0f7 0%, #e8ecf5 100%);
+            transform: translateX(-5px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.2);
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #999;
+            padding: 30px;
+            font-size: 16px;
+        }
+
+        @media (max-width: 500px) {
+            .container {
+                padding: 20px;
+            }
+
+            h1 {
+                font-size: 24px;
+            }
+
+            .input-group {
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
-    <h1>ניהול משימות</h1>
-    
-    <div>
-        <input type="text" id="taskInput" placeholder="משימה חדשה...">
-        <button onclick="addTask()">הוסף משימה</button>
-    </div>
+    <div class="container">
+        <h1>📋 ניהול משימות</h1>
+        <p class="subtitle">ארגן את המשימות שלך בקלות</p>
 
-    <ul id="taskList"></ul>
+        <div class="input-group">
+            <input type="text" id="taskInput" placeholder="משימה חדשה...">
+            <button onclick="addTask()">הוסף משימה</button>
+        </div>
+
+        <ul id="taskList"></ul>
+    </div>
 
     <script>
         let backendUrl = '';
