@@ -1,3 +1,22 @@
+# Screenshots
+
+## Application Running - Before Changes
+![Application Running Before Changes](screenshots/app-running1.png)
+
+## Application Running - After Changes (with API Proxy)
+![Application Running After Changes](screenshots/app-running2.png)
+
+## Kubernetes Status
+
+### kubectl get pods
+![kubectl get pods](screenshots/kubectl-pods.png)
+
+### kubectl get svc
+![kubectl get svc](screenshots/kubectl-svc.png)
+
+### kubectl get ingress
+![kubectl get ingress](screenshots/kubectl-ingress.png)
+
 # DevOps Task Manager
 
 A simple task management system with Frontend, Backend, and Database, deployed on Kubernetes.

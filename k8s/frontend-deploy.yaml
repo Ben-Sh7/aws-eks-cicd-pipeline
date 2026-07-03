@@ -16,13 +16,13 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: frontend:latest
-        imagePullPolicy: IfNotPresent
+        image: 688035105164.dkr.ecr.us-east-1.amazonaws.com/devops-task-manager-frontend:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 3000
           name: http
         env:
-        - name: REACT_APP_BACKEND_URL
+        - name: BACKEND_URL
           valueFrom:
             configMapKeyRef:
               name: app-config
