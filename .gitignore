@@ -1,0 +1,14 @@
+text.md
+backend/a.yaml
+k8s/secret.yaml
+node_modules/
+.env
+.env.local
+*.log
+.DS_Store
+dist/
+build/
+.idea/
+.vscode/
+*.swp
+*.swo
