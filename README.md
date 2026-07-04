@@ -17,6 +17,14 @@
 ### kubectl get ingress
 ![kubectl get ingress](screenshots/kubectl-ingress.png)
 
+### jenkins runs in EC2
+
+### EC2 instances runs: 1 instance for jenkins, 2 instances for EKS worker nodes
+![EC2 Infrastructure - 1 Jenkins, 2 EKS Workers](screenshots/EC2-1jenkins-2backend&frontend.png)
+
+### Jenkins Running on EC2
+![Jenkins Pipeline on EC2](screenshots/jenkins-by-EC2.png)
+
 # DevOps Task Manager
 
 A simple task management system with Frontend, Backend, and Database, deployed on Kubernetes.
@@ -398,4 +406,3 @@ This enables Zero Downtime Updates.
 For more information: [Kubernetes Documentation](https://kubernetes.io/docs/)
 
 
-///push for testing pipeline!!
