@@ -7,7 +7,6 @@ pipeline {
         BACKEND_REPO = 'devops-task-manager-backend'
         FRONTEND_REPO = 'devops-task-manager-frontend'
         BUILD_TAG = "${BUILD_NUMBER}-${new Date().format('yyyyMMddHHmmss')}"
-        AWS_CREDENTIALS = credentials('aws-credentials')
         EKS_CLUSTER_NAME = 'task-manager-cluster'
         KUBECONFIG = "${WORKSPACE}/kubeconfig"
     }
@@ -158,13 +157,6 @@ pipeline {
     }
 
     post {
-        always {
-            script {
-                sh '''
-                    docker logout ${ECR_REGISTRY} || true
-                '''
-            }
-        }
         success {
             echo "Pipeline executed successfully!"
             echo "Backend image: ${ECR_REGISTRY}/${BACKEND_REPO}:${BUILD_TAG}"
