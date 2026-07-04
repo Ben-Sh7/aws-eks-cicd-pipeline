@@ -6,6 +6,7 @@ pipeline {
         ECR_REGISTRY = '688035105164.dkr.ecr.us-east-1.amazonaws.com'
         BACKEND_REPO = 'devops-task-manager-backend'
         FRONTEND_REPO = 'devops-task-manager-frontend'
+        VERSION = "1.0.${BUILD_NUMBER}"
         BUILD_TAG = "${BUILD_NUMBER}-${new Date().format('yyyyMMddHHmmss')}"
         EKS_CLUSTER_NAME = 'task-manager-cluster'
         KUBECONFIG = "${WORKSPACE}/kubeconfig"
@@ -27,12 +28,14 @@ pipeline {
         stage('Build Docker Images') {
             steps {
                 script {
-                    echo "Building Docker images with tag: ${BUILD_TAG}"
+                    echo "Building Docker images with tag: ${VERSION}"
                     sh '''
-                        docker build -t ${BACKEND_REPO}:${BUILD_TAG} ./backend
-                        docker build -t ${FRONTEND_REPO}:${BUILD_TAG} ./frontend
-                        docker tag ${BACKEND_REPO}:${BUILD_TAG} ${BACKEND_REPO}:latest
-                        docker tag ${FRONTEND_REPO}:${BUILD_TAG} ${FRONTEND_REPO}:latest
+                        docker build -t ${BACKEND_REPO}:${VERSION} ./backend
+                        docker build -t ${FRONTEND_REPO}:${VERSION} ./frontend
+                        docker tag ${BACKEND_REPO}:${VERSION} ${BACKEND_REPO}:latest
+                        docker tag ${BACKEND_REPO}:${VERSION} ${BACKEND_REPO}:v1
+                        docker tag ${FRONTEND_REPO}:${VERSION} ${FRONTEND_REPO}:latest
+                        docker tag ${FRONTEND_REPO}:${VERSION} ${FRONTEND_REPO}:v1
                     '''
                 }
             }
@@ -52,17 +55,21 @@ pipeline {
         stage('Push to ECR') {
             steps {
                 script {
-                    echo "Pushing images to ECR"
+                    echo "Pushing images to ECR with tags: ${VERSION}, latest, v1"
                     sh '''
-                        docker tag ${BACKEND_REPO}:${BUILD_TAG} ${ECR_REGISTRY}/${BACKEND_REPO}:${BUILD_TAG}
+                        docker tag ${BACKEND_REPO}:${VERSION} ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
                         docker tag ${BACKEND_REPO}:latest ${ECR_REGISTRY}/${BACKEND_REPO}:latest
-                        docker push ${ECR_REGISTRY}/${BACKEND_REPO}:${BUILD_TAG}
+                        docker tag ${BACKEND_REPO}:v1 ${ECR_REGISTRY}/${BACKEND_REPO}:v1
+                        docker push ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
                         docker push ${ECR_REGISTRY}/${BACKEND_REPO}:latest
+                        docker push ${ECR_REGISTRY}/${BACKEND_REPO}:v1
 
-                        docker tag ${FRONTEND_REPO}:${BUILD_TAG} ${ECR_REGISTRY}/${FRONTEND_REPO}:${BUILD_TAG}
+                        docker tag ${FRONTEND_REPO}:${VERSION} ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
                         docker tag ${FRONTEND_REPO}:latest ${ECR_REGISTRY}/${FRONTEND_REPO}:latest
-                        docker push ${ECR_REGISTRY}/${FRONTEND_REPO}:${BUILD_TAG}
+                        docker tag ${FRONTEND_REPO}:v1 ${ECR_REGISTRY}/${FRONTEND_REPO}:v1
+                        docker push ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
                         docker push ${ECR_REGISTRY}/${FRONTEND_REPO}:latest
+                        docker push ${ECR_REGISTRY}/${FRONTEND_REPO}:v1
                     '''
                 }
             }
@@ -84,10 +91,10 @@ pipeline {
         stage('Update Kubernetes Manifests') {
             steps {
                 script {
-                    echo "Updating Kubernetes manifests with new image tags"
+                    echo "Updating Kubernetes manifests with version: ${VERSION}"
                     sh '''
-                        export ECR_BACKEND_IMAGE=${ECR_REGISTRY}/${BACKEND_REPO}:${BUILD_TAG}
-                        export ECR_FRONTEND_IMAGE=${ECR_REGISTRY}/${FRONTEND_REPO}:${BUILD_TAG}
+                        export ECR_BACKEND_IMAGE=${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
+                        export ECR_FRONTEND_IMAGE=${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
 
                         sed -i "s|backend:latest|${ECR_BACKEND_IMAGE}|g" k8s/backend-deploy.yaml
                         sed -i "s|frontend:latest|${ECR_FRONTEND_IMAGE}|g" k8s/frontend-deploy.yaml
@@ -158,8 +165,9 @@ pipeline {
     post {
         success {
             echo "Pipeline executed successfully!"
-            echo "Backend image: ${ECR_REGISTRY}/${BACKEND_REPO}:${BUILD_TAG}"
-            echo "Frontend image: ${ECR_REGISTRY}/${FRONTEND_REPO}:${BUILD_TAG}"
+            echo "Backend image: ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}"
+            echo "Frontend image: ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}"
+            echo "Tags: ${VERSION}, latest, v1"
         }
         failure {
             echo "Pipeline failed. Check logs for details."
