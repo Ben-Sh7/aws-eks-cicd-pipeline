@@ -126,7 +126,6 @@ pipeline {
                         echo "Waiting for deployments to roll out..."
                         kubectl rollout status deployment/backend-deploy -n default --timeout=5m
                         kubectl rollout status deployment/frontend-deploy -n default --timeout=5m
-                        kubectl rollout status deployment/postgres-deploy -n default --timeout=5m
                     '''
                 }
             }
