@@ -292,7 +292,24 @@ eksctl create iamserviceaccount \
   --region us-east-1
 ```
 
-### Local Development
+### Local Development with Docker Compose
+
+Sensitive values are managed via a `.env` file that is **never committed to Git** (listed in `.gitignore`).
+
+1. Copy the example file and fill in your values:
+```bash
+cp .env.example .env
+# Then edit .env with your chosen password
+```
+
+2. Run the stack:
+```bash
+docker compose up -d
+```
+
+> **Note:** An earlier version of this project had hardcoded credentials in `docker-compose.yml`. This has been corrected — credentials are now loaded from `.env` at runtime.
+
+### Local Testing with Minikube
 
 For local testing with Minikube, create `k8s/secret.yaml` locally (not in GitHub):
 
