@@ -4,6 +4,7 @@ metadata:
   name: postgres-deploy
   labels:
     app: postgres
+    {{- include "task-manager.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
@@ -16,7 +17,7 @@ spec:
     spec:
       containers:
       - name: postgres
-        image: postgres:15-alpine
+        image: {{ .Values.postgres.image }}
         ports:
         - containerPort: 5432
           name: postgres
@@ -43,12 +44,7 @@ spec:
         - name: postgres-storage
           mountPath: /var/lib/postgresql/data
         resources:
-          requests:
-            cpu: 100m
-            memory: 256Mi
-          limits:
-            cpu: 500m
-            memory: 512Mi
+          {{- toYaml .Values.postgres.resources | nindent 10 }}
         livenessProbe:
           exec:
             command:
@@ -73,19 +69,3 @@ spec:
       - name: postgres-storage
         persistentVolumeClaim:
           claimName: postgres-pvc
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: postgres-service
-  labels:
-    app: postgres
-spec:
-  type: ClusterIP
-  ports:
-  - port: 5432
-    targetPort: 5432
-    protocol: TCP
-    name: postgres
-  selector:
-    app: postgres

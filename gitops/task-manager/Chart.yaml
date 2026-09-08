@@ -1,0 +1,8 @@
+apiVersion: v2
+name: task-manager
+description: >-
+  DevOps Task Manager - React frontend + Node/Express backend + PostgreSQL,
+  packaged as a single flat Helm chart (portfolio project).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

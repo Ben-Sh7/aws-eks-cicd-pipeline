@@ -1,0 +1,7 @@
+# Managed by Jenkins CI - do not hand-edit. ArgoCD deploys whatever tag is here.
+backend:
+  image:
+    tag: latest
+frontend:
+  image:
+    tag: latest

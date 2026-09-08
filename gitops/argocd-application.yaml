@@ -1,0 +1,33 @@
+# Registers the app with ArgoCD. Applied once (manually or via ./create.sh)
+# after ArgoCD is up. From here on, ArgoCD watches this repo and deploys
+# the app itself.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: task-manager
+  namespace: argocd
+  # Makes `kubectl delete` cascade: deletes everything this app owns
+  # (Deployments, Services, Ingress, PVC) before removing the Application.
+  # destroy.sh relies on this - do not remove.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Ben-Sh7/devops-task-manager.git
+    targetRevision: main
+    path: gitops/task-manager
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-images.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true

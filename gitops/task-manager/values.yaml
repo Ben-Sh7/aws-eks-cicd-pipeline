@@ -1,0 +1,72 @@
+# Default values for the task-manager chart.
+# Image tags are overridden by values-images.yaml (bumped by Jenkins CI).
+
+backend:
+  image:
+    repository: 688035105164.dkr.ecr.us-east-1.amazonaws.com/devops-task-manager-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 3
+  port: 3001
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+frontend:
+  image:
+    repository: 688035105164.dkr.ecr.us-east-1.amazonaws.com/devops-task-manager-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+postgres:
+  image: postgres:15-alpine
+  storage:
+    size: 10Gi
+    # gp2 is AWS-EBS-specific; change if deploying to a non-AWS cluster.
+    storageClassName: gp2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Non-sensitive shared configuration (rendered into the app-config ConfigMap).
+config:
+  dbHost: postgres-service
+  dbPort: "5432"
+  dbName: tasksdb
+  backendUrl: http://backend-service:3001
+  backendPort: "3001"
+
+# mode: externalSecrets (default) - pulls DB_USER/DB_PASSWORD from AWS
+#   Secrets Manager via the External Secrets Operator. No real credentials here.
+# mode: local - renders a plain Secret from dbUser/dbPassword below, for
+#   local/demo use only (via a gitignored values-secret.yaml).
+secrets:
+  mode: externalSecrets
+  awsRegion: us-east-1
+  awsSecretName: app-secrets
+  refreshInterval: 1h
+  dbUser: ""
+  dbPassword: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  # Empty host = match-all path rule, same behavior as the original ingress.yaml.
+  host: ""

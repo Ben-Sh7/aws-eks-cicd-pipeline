@@ -4,8 +4,9 @@ metadata:
   name: backend-deploy
   labels:
     app: backend
+    {{- include "task-manager.labels" . | nindent 4 }}
 spec:
-  replicas: 3
+  replicas: {{ .Values.backend.replicaCount }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -21,10 +22,10 @@ spec:
     spec:
       containers:
       - name: backend
-        image: backend:latest
-        imagePullPolicy: IfNotPresent
+        image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+        imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
         ports:
-        - containerPort: 3001
+        - containerPort: {{ .Values.backend.port }}
           name: http
         envFrom:
         - configMapRef:
@@ -32,16 +33,11 @@ spec:
         - secretRef:
             name: app-secret
         resources:
-          requests:
-            cpu: 100m
-            memory: 128Mi
-          limits:
-            cpu: 500m
-            memory: 512Mi
+          {{- toYaml .Values.backend.resources | nindent 10 }}
         livenessProbe:
           httpGet:
             path: /health
-            port: 3001
+            port: {{ .Values.backend.port }}
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -49,24 +45,8 @@ spec:
         readinessProbe:
           httpGet:
             path: /health
-            port: 3001
+            port: {{ .Values.backend.port }}
           initialDelaySeconds: 10
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: backend-service
-  labels:
-    app: backend
-spec:
-  type: ClusterIP
-  ports:
-  - port: 3001
-    targetPort: 3001
-    protocol: TCP
-    name: http
-  selector:
-    app: backend
