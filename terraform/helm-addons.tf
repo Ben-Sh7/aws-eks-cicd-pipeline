@@ -15,6 +15,12 @@ resource "helm_release" "ingress_nginx" {
     value = "LoadBalancer"
   }
 
+  # Tags the ELB - Kubernetes creates it, not Terraform, so no `tags` arg applies.
+  set {
+    name  = "controller.service.annotations.service\\.beta\\.kubernetes\\.io/aws-load-balancer-additional-resource-tags"
+    value = "Project=${local.common_tags.Project},Environment=${local.common_tags.Environment},ManagedBy=${local.common_tags.ManagedBy},CreatedBy=${local.common_tags.CreatedBy},CreatedDate=${local.common_tags.CreatedDate}"
+  }
+
   depends_on = [aws_eks_node_group.main]
 }
 

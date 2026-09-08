@@ -53,6 +53,7 @@ resource "aws_iam_role_policy" "jenkins_ecr_push" {
 resource "aws_iam_instance_profile" "jenkins" {
   name_prefix = "${local.project_name}-jenkins-"
   role        = aws_iam_role.jenkins.name
+  tags        = local.common_tags
 }
 
 locals {

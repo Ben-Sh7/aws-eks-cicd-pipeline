@@ -35,8 +35,8 @@ postgres:
   image: postgres:15-alpine
   storage:
     size: 10Gi
-    # gp2 is AWS-EBS-specific; change if deploying to a non-AWS cluster.
-    storageClassName: gp2
+    # CSI-backed, defined in terraform/ebs-csi.tf. AWS-specific.
+    storageClassName: gp3-tagged
   resources:
     requests:
       cpu: 100m

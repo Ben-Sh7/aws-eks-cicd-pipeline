@@ -304,6 +304,26 @@ resource "aws_eks_cluster" "main" {
 # ============================================
 # EKS NODE GROUP
 # ============================================
+# Node group tags propagate to its EC2 instances automatically, but not to
+# their EBS volumes - this exists just to tag those too.
+resource "aws_launch_template" "eks_nodes" {
+  name_prefix = "${local.project_name}-nodes-"
+
+  tag_specifications {
+    resource_type = "volume"
+    tags = merge(
+      local.common_tags,
+      { Name = "${local.project_name}-node-volume" }
+    )
+  }
+
+  tags = local.common_tags
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "aws_eks_node_group" "main" {
   cluster_name    = aws_eks_cluster.main.name
   node_group_name = "${local.project_name}-nodes"
@@ -318,6 +338,11 @@ resource "aws_eks_node_group" "main" {
   }
 
   instance_types = [var.node_instance_type]
+
+  launch_template {
+    id      = aws_launch_template.eks_nodes.id
+    version = aws_launch_template.eks_nodes.latest_version
+  }
 
   tags = merge(
     local.common_tags,
@@ -347,6 +372,10 @@ resource "aws_instance" "jenkins" {
     volume_size           = var.jenkins_root_volume_size
     volume_type           = "gp3"
     delete_on_termination = true
+    tags = merge(
+      local.common_tags,
+      { Name = "${local.project_name}-jenkins-root" }
+    )
   }
 
   # Installs Jenkins/Docker and bootstraps the admin user, GitHub
