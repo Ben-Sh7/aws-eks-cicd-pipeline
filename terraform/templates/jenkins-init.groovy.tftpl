@@ -1,0 +1,60 @@
+import jenkins.model.Jenkins
+import hudson.security.HudsonPrivateSecurityRealm
+import hudson.security.FullControlOnceLoggedInAuthorizationStrategy
+import hudson.plugins.git.GitSCM
+import hudson.plugins.git.BranchSpec
+import org.jenkinsci.plugins.workflow.job.WorkflowJob
+import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
+import com.cloudbees.jenkins.GitHubPushTrigger
+import com.cloudbees.plugins.credentials.CredentialsScope
+import com.cloudbees.plugins.credentials.SystemCredentialsProvider
+import com.cloudbees.plugins.credentials.domains.Domain
+import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl
+import com.cloudbees.plugins.credentials.CredentialsProvider
+import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials
+
+def jenkins = Jenkins.get()
+
+// Jenkins ships with NO authentication once the setup wizard is skipped -
+// without this it would be wide open on the internet (port 8080 is public).
+if (!(jenkins.getSecurityRealm() instanceof HudsonPrivateSecurityRealm)) {
+    def realm = new HudsonPrivateSecurityRealm(false)
+    realm.createAccount('admin', '${jenkins_admin_password}')
+    jenkins.setSecurityRealm(realm)
+    jenkins.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy())
+}
+
+// GitHub PAT credential, used by the Jenkinsfile's GitOps push-back stage.
+def credId = 'github-credentials'
+def existingCred = CredentialsProvider.lookupCredentials(
+    StandardUsernamePasswordCredentials.class, jenkins, null, null
+).find { it.id == credId }
+
+if (!existingCred) {
+    def cred = new UsernamePasswordCredentialsImpl(
+        CredentialsScope.GLOBAL, credId, 'GitHub PAT for CI GitOps push-back',
+        '${github_username}', '${github_pat}'
+    )
+    SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), cred)
+}
+
+// Pipeline job - "Pipeline script from SCM" pointing at this repo's Jenkinsfile.
+def jobName = 'task-manager'
+if (jenkins.getItem(jobName) == null) {
+    def job = jenkins.createProject(WorkflowJob.class, jobName)
+
+    def scm = new GitSCM('${repo_url}')
+    scm.branches = [new BranchSpec('*/main')]
+
+    def flowDef = new CpsScmFlowDefinition(scm, 'Jenkinsfile')
+    flowDef.setLightweight(true)
+    job.setDefinition(flowDef)
+
+    def trigger = new GitHubPushTrigger()
+    job.addTrigger(trigger)
+    trigger.start(job, true)
+
+    job.save()
+}
+
+jenkins.save()

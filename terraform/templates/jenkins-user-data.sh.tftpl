@@ -1,0 +1,59 @@
+#!/bin/bash
+set -eo pipefail
+exec > /var/log/jenkins-bootstrap.log 2>&1
+
+apt-get update -y
+apt-get install -y openjdk-21-jdk docker.io awscli git curl gnupg
+
+usermod -aG docker jenkins || true
+usermod -aG docker ubuntu || true
+
+# Trivy (CVE scanner) - pinned version + checksum verification, not
+# curl|sh from a floating "latest" tag. Trivy's own release pipeline was
+# compromised twice in 2026 via poisoned releases/tags, so a fixed,
+# checksum-verified version is a deliberate choice here, not an oversight.
+TRIVY_VERSION="0.74.0"
+TRIVY_TARBALL="trivy_$${TRIVY_VERSION}_Linux-64bit.tar.gz"
+cd /tmp
+curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v$${TRIVY_VERSION}/$${TRIVY_TARBALL}"
+curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v$${TRIVY_VERSION}/trivy_$${TRIVY_VERSION}_checksums.txt"
+grep " $${TRIVY_TARBALL}\$" "trivy_$${TRIVY_VERSION}_checksums.txt" | sha256sum -c -
+tar xzf "$TRIVY_TARBALL" trivy
+mv trivy /usr/local/bin/trivy
+chmod +x /usr/local/bin/trivy
+cd /
+
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key -o /usr/share/keyrings/jenkins-keyring.asc
+echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" > /etc/apt/sources.list.d/jenkins.list
+apt-get update -y
+apt-get install -y jenkins
+
+systemctl stop jenkins
+
+# Skip the setup wizard - the Groovy init script below configures a real
+# admin account instead, so this doesn't leave Jenkins wide open.
+mkdir -p /etc/systemd/system/jenkins.service.d
+cat > /etc/systemd/system/jenkins.service.d/override.conf << 'SYSTEMD_EOF'
+[Service]
+Environment="JAVA_OPTS=-Djenkins.install.runSetupWizard=false"
+SYSTEMD_EOF
+systemctl daemon-reload
+
+# Pre-install the plugins this pipeline needs before Jenkins first starts.
+JENKINS_WAR=$(find /usr/share -name jenkins.war | head -1)
+mkdir -p /var/lib/jenkins/plugins
+curl -fsSL -o /tmp/jenkins-plugin-manager.jar \
+  https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/2.13.2/jenkins-plugin-manager-2.13.2.jar
+java -jar /tmp/jenkins-plugin-manager.jar \
+  --war "$JENKINS_WAR" \
+  --plugin-download-directory /var/lib/jenkins/plugins \
+  --plugins git github workflow-aggregator credentials-binding
+
+# Bootstrap script: admin account, GitHub credential, and the Pipeline job.
+mkdir -p /var/lib/jenkins/init.groovy.d
+cat > /var/lib/jenkins/init.groovy.d/bootstrap.groovy << 'GROOVY_EOF'
+${groovy_script}
+GROOVY_EOF
+
+chown -R jenkins:jenkins /var/lib/jenkins
+systemctl start jenkins

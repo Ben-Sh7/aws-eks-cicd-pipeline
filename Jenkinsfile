@@ -1,3 +1,8 @@
+// CI only: build, push to ECR, bump the image tag in values-images.yaml and
+// push it back. ArgoCD (see gitops/argocd-application.yaml) watches this repo and
+// deploys the app. The guard stage below skips the pipeline when the last
+// commit was made by this same pipeline (jenkins-ci-bot), to avoid a loop.
+
 pipeline {
     agent any
 
@@ -7,14 +12,10 @@ pipeline {
         BACKEND_REPO = 'devops-task-manager-backend'
         FRONTEND_REPO = 'devops-task-manager-frontend'
         VERSION = "1.0.${BUILD_NUMBER}"
-        BUILD_TAG = "${BUILD_NUMBER}-${new Date().format('yyyyMMddHHmmss')}"
-        EKS_CLUSTER_NAME = 'task-manager-cluster'
-        KUBECONFIG = "${WORKSPACE}/kubeconfig"
-    }
-
-    parameters {
-        string(name: 'AWS_ACCOUNT_ID', defaultValue: '688035105164', description: 'AWS Account ID')
-        string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS Region')
+        GITOPS_VALUES_FILE = 'gitops/task-manager/values-images.yaml'
+        GITOPS_REPO_URL = 'github.com/Ben-Sh7/devops-task-manager.git'
+        CI_BOT_NAME = 'jenkins-ci-bot'
+        CI_BOT_EMAIL = 'jenkins-ci-bot@users.noreply.github.com'
     }
 
     stages {
@@ -25,13 +26,26 @@ pipeline {
             }
         }
 
+        stage('Guard: skip CI-authored commits') {
+            steps {
+                script {
+                    def lastAuthor = sh(script: "git log -1 --pretty=%an", returnStdout: true).trim()
+                    env.SKIP_BUILD = (lastAuthor == env.CI_BOT_NAME) ? 'true' : 'false'
+                    if (env.SKIP_BUILD == 'true') {
+                        echo "Last commit was by ${env.CI_BOT_NAME} - skipping to avoid a loop."
+                    }
+                }
+            }
+        }
+
         stage('Build Docker Images') {
+            when { expression { env.SKIP_BUILD != 'true' } }
             steps {
                 script {
                     echo "Building Docker images with tag: ${VERSION}"
                     sh '''
-                        docker build -t ${BACKEND_REPO}:${VERSION} ./backend
-                        docker build -t ${FRONTEND_REPO}:${VERSION} ./frontend
+                        docker build -t ${BACKEND_REPO}:${VERSION} ./app/backend
+                        docker build -t ${FRONTEND_REPO}:${VERSION} ./app/frontend
                         docker tag ${BACKEND_REPO}:${VERSION} ${BACKEND_REPO}:latest
                         docker tag ${BACKEND_REPO}:${VERSION} ${BACKEND_REPO}:v1
                         docker tag ${FRONTEND_REPO}:${VERSION} ${FRONTEND_REPO}:latest
@@ -41,7 +55,21 @@ pipeline {
             }
         }
 
+        stage('Scan Images for CVEs (Trivy)') {
+            when { expression { env.SKIP_BUILD != 'true' } }
+            steps {
+                script {
+                    echo "Scanning images for HIGH/CRITICAL CVEs - fails the build before anything reaches ECR"
+                    sh '''
+                        trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed ${BACKEND_REPO}:${VERSION}
+                        trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed ${FRONTEND_REPO}:${VERSION}
+                    '''
+                }
+            }
+        }
+
         stage('Login to AWS ECR') {
+            when { expression { env.SKIP_BUILD != 'true' } }
             steps {
                 script {
                     echo "Logging in to AWS ECR"
@@ -53,6 +81,7 @@ pipeline {
         }
 
         stage('Push to ECR') {
+            when { expression { env.SKIP_BUILD != 'true' } }
             steps {
                 script {
                     echo "Pushing images to ECR with tags: ${VERSION}, latest, v1"
@@ -75,88 +104,30 @@ pipeline {
             }
         }
 
-        stage('Configure kubectl') {
+        stage('Update GitOps Values') {
+            when { expression { env.SKIP_BUILD != 'true' } }
             steps {
                 script {
-                    echo "Configuring kubectl for EKS"
-                    sh '''
-                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${EKS_CLUSTER_NAME} --kubeconfig ${KUBECONFIG}
-                        export KUBECONFIG=${KUBECONFIG}
-                        kubectl cluster-info
-                    '''
-                }
-            }
-        }
+                    echo "Bumping ${GITOPS_VALUES_FILE} to ${VERSION} and pushing - this is what triggers ArgoCD to deploy"
+                    withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                        sh '''
+                            cat > ${GITOPS_VALUES_FILE} << YAML
+# Managed by Jenkins CI - do not hand-edit. ArgoCD deploys whatever tag is here.
+backend:
+  image:
+    tag: "${VERSION}"
+frontend:
+  image:
+    tag: "${VERSION}"
+YAML
 
-        stage('Update Kubernetes Manifests') {
-            steps {
-                script {
-                    echo "Updating Kubernetes manifests with version: ${VERSION}"
-                    sh '''
-                        export ECR_BACKEND_IMAGE=${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
-                        export ECR_FRONTEND_IMAGE=${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
-
-                        sed -i "s|backend:latest|${ECR_BACKEND_IMAGE}|g" k8s/backend-deploy.yaml
-                        sed -i "s|frontend:latest|${ECR_FRONTEND_IMAGE}|g" k8s/frontend-deploy.yaml
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy to EKS') {
-            steps {
-                script {
-                    echo "Deploying to EKS cluster"
-                    sh '''
-                        export KUBECONFIG=${KUBECONFIG}
-
-                        kubectl apply -f k8s/configmap.yaml
-
-                        # Create secret from AWS Secrets Manager (or use local secret for local deployments)
-                        if aws secretsmanager get-secret-value --secret-id app-secrets --region ${AWS_REGION} 2>/dev/null; then
-                            echo "Using secrets from AWS Secrets Manager"
-                            SECRETS=$(aws secretsmanager get-secret-value --secret-id app-secrets --region ${AWS_REGION} --query SecretString --output text)
-                            DB_USER=$(echo $SECRETS | jq -r '.DB_USER')
-                            DB_PASSWORD=$(echo $SECRETS | jq -r '.DB_PASSWORD')
-                            kubectl create secret generic app-secret --from-literal=DB_USER="$DB_USER" --from-literal=DB_PASSWORD="$DB_PASSWORD" --dry-run=client -o yaml | kubectl apply -f -
-                        else
-                            echo "AWS Secrets Manager not configured, using local secret"
-                            kubectl apply -f k8s/secret.yaml
-                        fi
-
-                        kubectl apply -f k8s/postgress-pvc.yaml
-                        kubectl apply -f k8s/postgres-db.yaml
-                        kubectl apply -f k8s/backend-deploy.yaml
-                        kubectl apply -f k8s/frontend-deploy.yaml
-                        kubectl apply -f k8s/ingress.yaml
-
-                        echo "Waiting for deployments to roll out..."
-                        kubectl rollout status deployment/backend-deploy -n default --timeout=5m
-                        kubectl rollout status deployment/frontend-deploy -n default --timeout=5m
-                    '''
-                }
-            }
-        }
-
-        stage('Verify Deployment') {
-            steps {
-                script {
-                    echo "Verifying deployment status"
-                    sh '''
-                        export KUBECONFIG=${KUBECONFIG}
-
-                        echo "=== Pod Status ==="
-                        kubectl get pods -o wide
-
-                        echo "=== Service Status ==="
-                        kubectl get svc
-
-                        echo "=== Ingress Status ==="
-                        kubectl get ingress
-
-                        echo "=== Deployment Status ==="
-                        kubectl get deployment
-                    '''
+                            git config user.name "${CI_BOT_NAME}"
+                            git config user.email "${CI_BOT_EMAIL}"
+                            git add ${GITOPS_VALUES_FILE}
+                            git commit -m "ci: deploy ${VERSION}"
+                            git push https://${GIT_USER}:${GIT_TOKEN}@${GITOPS_REPO_URL} HEAD:main
+                        '''
+                    }
                 }
             }
         }
@@ -168,6 +139,7 @@ pipeline {
             echo "Backend image: ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}"
             echo "Frontend image: ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}"
             echo "Tags: ${VERSION}, latest, v1"
+            echo "ArgoCD will pick up the values-images.yaml change and deploy it automatically."
         }
         failure {
             echo "Pipeline failed. Check logs for details."
