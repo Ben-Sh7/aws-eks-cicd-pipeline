@@ -1,6 +1,3 @@
-text.md
-backend/a.yaml
-k8s/secret.yaml
 node_modules/
 .env
 .env.local
@@ -12,3 +9,25 @@ build/
 .vscode/
 *.swp
 *.swo
+
+# Helm secret values - real DB credentials for local/demo installs.
+# NEVER commit this; copy values-secret.yaml.example instead.
+gitops/task-manager/values-secret.yaml
+
+# Terraform state and local artifacts - MUST NEVER be committed.
+# State can contain sensitive resource attributes (and Terraform itself
+# warns against committing it). The provider lock file is safe/recommended
+# to commit (only hashes, no secrets) and is NOT excluded by these patterns.
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfplan
+terraform/tfplan
+terraform/destroy.tfplan
+terraform/crash*.log
+
+# terraform.tfvars may hold the Grafana admin password or other sensitive
+# overrides - never commit; only the .tfvars.example template is tracked.
+terraform/*.tfvars
+terraform/*.tfvars.json
+!terraform/*.tfvars.example
