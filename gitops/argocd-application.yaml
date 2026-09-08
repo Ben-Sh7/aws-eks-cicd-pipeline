@@ -15,7 +15,7 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/Ben-Sh7/devops-task-manager.git
+    repoURL: https://github.com/Ben-Sh7/aws-eks-cicd-pipeline.git
     targetRevision: main
     path: gitops/task-manager
     helm:

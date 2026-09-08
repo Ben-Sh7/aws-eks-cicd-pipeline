@@ -147,7 +147,7 @@ create_infrastructure() {
     BACKEND_REPO=$(terraform output -raw backend_repository_url 2>/dev/null)
     FRONTEND_REPO=$(terraform output -raw frontend_repository_url 2>/dev/null)
     AWS_REGION_OUT=$(terraform output -raw aws_region 2>/dev/null || echo "us-east-1")
-    GITHUB_REPO=$(terraform output -raw github_repo 2>/dev/null || echo "Ben-Sh7/devops-task-manager")
+    GITHUB_REPO=$(terraform output -raw github_repo 2>/dev/null || echo "Ben-Sh7/aws-eks-cicd-pipeline")
 
     cd "$PROJECT_DIR"
 }

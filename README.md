@@ -1,423 +1,60 @@
-# Screenshots
-
-## Application Running - Before Changes
-![Application Running Before Changes](screenshots/app-running1.png)
-
-## Application Running - After Changes (with API Proxy)
-![Application Running After Changes](screenshots/app-running2.png)
-
-## Kubernetes Status
-
-### kubectl get pods
-![kubectl get pods](screenshots/kubectl-pods.png)
-
-### kubectl get svc
-![kubectl get svc](screenshots/kubectl-svc.png)
-
-### kubectl get ingress
-![kubectl get ingress](screenshots/kubectl-ingress.png)
-
-### EC2 Infrastructure - Jenkins & EKS Workers
-![EC2 Infrastructure - 1 Jenkins, 2 EKS Workers](screenshots/EC2-1jenkins-2backend&frontend.png)
-
-### Jenkins Pipeline Running on EC2
-![Jenkins Pipeline on EC2](screenshots/jenkins-by-EC2.png)
-
 # DevOps Task Manager
 
-A simple task management system with Frontend, Backend, and Database, deployed on Kubernetes.
+> Push code. Everything else — build, deploy, secrets, monitoring — happens by itself.
 
-⚠️ **SECURITY NOTICE**: Never commit real secrets to GitHub. This project uses AWS Secrets Manager to store sensitive data securely. See "Secrets Management" section below.
+A task manager (React + Node/Express + PostgreSQL) deployed on AWS EKS, with GitOps CI/CD and infrastructure as code.
 
-## Project Description
+## Quick Start
 
-- **Frontend**: React application on port 3000
-- **Backend**: Node.js Express API on port 3001
-- **Database**: PostgreSQL 15
-- **Orchestration**: Kubernetes (EKS)
-- **Container Registry**: AWS ECR
-- **CI/CD**: Jenkins
-
-## Prerequisites
-
-- AWS Account
-- Docker
-- kubectl
-- AWS CLI
-- Jenkins Server (Local or EC2)
-- ngrok (if Jenkins runs locally)
-- helm (for Ingress Controller)
-
-## Setup Steps
-
-### 1. Create ECR Repositories
+Create `.env` in the project root with:
+```
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=<your password>
+POSTGRES_DB=tasksdb
+TF_VAR_grafana_admin_password=<your password>
+TF_VAR_jenkins_admin_password=<your password>
+TF_VAR_github_pat=<your GitHub PAT>
+```
 
 ```bash
-# Configure AWS
-aws configure
+# 1. Spin up everything: infra + Jenkins (fully configured) + add-ons + app
+./create.sh
 
-# Create repositories
-aws ecr create-repository --repository-name devops-task-manager-backend --region us-east-1
-aws ecr create-repository --repository-name devops-task-manager-frontend --region us-east-1
-
-# Verify repositories were created
-aws ecr describe-repositories --region us-east-1
+# 2. When done - tear down everything, no orphaned resources
+./destroy.sh
 ```
 
-### 2. Create EKS Cluster
+`create.sh`/`destroy.sh` both auto-load `.env` if it exists. See [.env.example](.env.example) for the three required variables (`TF_VAR_grafana_admin_password`, `TF_VAR_jenkins_admin_password`, `TF_VAR_github_pat`) and where each one is used.
+
+## How It Works
+
+1. **Push code** to `main` → GitHub webhook fires (auto-managed by `create.sh` - it re-points at the Jenkins EC2's IP on every run)
+2. **Jenkins (CI)** builds the Docker image, pushes it to ECR, bumps the image tag in `gitops/task-manager/values-images.yaml`, and pushes that back to the repo
+3. **ArgoCD (CD)** notices the change, pulls it, and deploys the app to EKS - Jenkins never touches the cluster
+4. **External Secrets Operator** pulls DB credentials from AWS Secrets Manager straight into the cluster - no secret ever passes through git or Jenkins
+5. **Prometheus + Grafana** watch the cluster the whole time
+
+Jenkins itself is fully self-configuring: `terraform apply` provisions the EC2 with a `user_data` script that installs Jenkins/Docker, and a Groovy init script that creates the admin login, the GitHub credential, and the Pipeline job automatically on first boot - no manual clicking through the Jenkins UI.
+
+## Architecture
+
+See [HLD.md](HLD.md) for the full design document.
+
+## Tech Stack
+
+- **App**: React, Node.js/Express, PostgreSQL
+- **Infrastructure as Code**: Terraform (VPC, EKS, EC2, ECR, IAM, OIDC)
+- **Packaging**: Helm
+- **CI**: Jenkins (build + push only), with Trivy scanning every image for CVEs before push
+- **CD**: ArgoCD (GitOps, pull-based)
+- **Secrets**: External Secrets Operator + IRSA ← AWS Secrets Manager
+- **Ingress**: ingress-nginx
+- **Monitoring**: Prometheus + Grafana (kube-prometheus-stack)
+
+## One-Time AWS Setup
 
 ```bash
-# Create cluster with eksctl
-eksctl create cluster --name task-manager-cluster --region us-east-1 --nodes 3 --node-type t3.medium
-
-# Alternative: Use AWS Console (recommended for first-time setup with 3 nodes)
-
-# Update kubeconfig after creation
-aws eks update-kubeconfig --region us-east-1 --name task-manager-cluster
-
-# Verify connection
-kubectl get nodes
-```
-
-### 3. Install Nginx Ingress Controller
-
-```bash
-# Add Helm repository
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-helm repo update
-
-# Install ingress-nginx
-helm install nginx-ingress ingress-nginx/ingress-nginx \
-  --namespace ingress-nginx \
-  --create-namespace \
-  --set controller.service.type=LoadBalancer
-```
-
-### 4. Local Testing with Minikube
-
-```bash
-# Start minikube
-minikube start
-
-# Apply manifest files
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/secret.yaml
-kubectl apply -f k8s/postgress-pvc.yaml
-kubectl apply -f k8s/postgres-db.yaml
-kubectl apply -f k8s/backend-deploy.yaml
-kubectl apply -f k8s/frontend-deploy.yaml
-kubectl apply -f k8s/ingress.yaml
-
-# Check deployments
-kubectl get pods
-kubectl get svc
-kubectl get ingress
-
-# Get minikube IP
-minikube ip
-
-# Access application in browser
-# http://<minikube-ip>
-```
-
-### 5. Jenkins Setup
-
-#### Option A: Local Jenkins with ngrok
-
-```bash
-# Install Jenkins (Mac/Linux)
-brew install jenkins-lts
-
-# Or download from https://www.jenkins.io/download/
-
-# Start Jenkins
-jenkins
-
-# Access at http://localhost:8080
-
-# Install ngrok
-brew install ngrok
-
-# Run ngrok
-ngrok http 8080
-
-# Copy the ngrok URL (e.g., https://abc123.ngrok.io)
-```
-
-#### Option B: Jenkins on EC2 (Recommended)
-
-```bash
-# Create EC2 instance (Ubuntu 20.04 LTS, t2.medium minimum)
-
-# Connect to instance
-ssh -i your-key.pem ubuntu@your-instance-ip
-
-# Update packages
-sudo apt update && sudo apt upgrade -y
-
-# Install Java
-sudo apt install openjdk-11-jdk -y
-
-# Install Jenkins
-wget -q -O - https://pkg.jenkins.io/debian-stable/jenkins.io.key | sudo apt-key add -
-sudo sh -c 'echo deb https://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list'
-sudo apt update
-sudo apt install jenkins -y
-
-# Start Jenkins
-sudo systemctl start jenkins
-sudo systemctl enable jenkins
-
-# Check status
-sudo systemctl status jenkins
-
-# Get initial admin password
-sudo cat /var/lib/jenkins/secrets/initialAdminPassword
-
-# Access Jenkins
-# http://your-instance-ip:8080
-```
-
-### 6. Configure GitHub Webhook
-
-1. In your GitHub repository, go to Settings → Webhooks
-2. Click "Add webhook"
-3. Payload URL: `https://your-jenkins-url/github-webhook/` (if using ngrok) or `http://your-ec2-ip:8080/github-webhook/`
-4. Content type: `application/json`
-5. Select events: `Push events`
-6. Check "Active"
-7. Click "Add webhook"
-
-### 7. Create Jenkins Job
-
-1. In Jenkins, click "New Item"
-2. Enter job name: `devops-task-manager`
-3. Select: "Pipeline"
-4. Click OK
-5. Under Pipeline section:
-   - Definition: `Pipeline script from SCM`
-   - SCM: `Git`
-   - Repository URL: `https://github.com/your-username/devops-task-manager.git`
-   - Branch: `*/main`
-6. Under Build Triggers section:
-   - Check: `GitHub hook trigger for GITScm polling`
-7. Save
-
-### 8. Configure AWS Credentials in Jenkins
-
-1. In Jenkins, click "Manage Jenkins" → "Manage Credentials"
-2. Click "(global)" → "Add Credentials"
-3. Select "AWS Credentials"
-4. Access Key ID: `your-aws-access-key`
-5. Secret Access Key: `your-aws-secret-key`
-6. ID: `aws-credentials`
-7. Save
-
-### 9. Update Jenkinsfile
-
-Update the following values in the `Jenkinsfile`:
-```groovy
-environment {
-    AWS_REGION = 'your-region'
-    ECR_REGISTRY = 'your-account-id.dkr.ecr.your-region.amazonaws.com'
-    EKS_CLUSTER_NAME = 'your-cluster-name'
-}
-```
-
-## Verifying the Application
-
-### Check Pods
-```bash
-kubectl get pods
-```
-
-Expected output:
-```
-NAME                              READY   STATUS    RESTARTS   AGE
-backend-deploy-xxxxx-xxxxx        1/1     Running   0          2m
-backend-deploy-xxxxx-xxxxx        1/1     Running   0          2m
-backend-deploy-xxxxx-xxxxx        1/1     Running   0          2m
-frontend-deploy-xxxxx-xxxxx       1/1     Running   0          2m
-postgres-deploy-xxxxx-xxxxx       1/1     Running   0          2m
-```
-
-### Check Services
-```bash
-kubectl get svc
-```
-
-### Check Ingress
-```bash
-kubectl get ingress
-```
-
-### Check Deployments
-```bash
-kubectl get deployment
-```
-
-## Running the Pipeline
-
-1. In GitHub, commit and push your changes
-2. GitHub triggers webhook to Jenkins
-3. Jenkins starts the Pipeline
-4. Monitor pipeline progress in Jenkins dashboard
-
-## Secrets Management
-
-**NEVER commit real secrets to GitHub.** This project uses AWS Secrets Manager for secure secret storage.
-
-### Setup AWS Secrets Manager
-
-1. **Create a secret in AWS Secrets Manager:**
-```bash
-aws secretsmanager create-secret \
-  --name app-secrets \
-  --region us-east-1 \
+# Create the DB credentials secret (External Secrets Operator syncs this automatically)
+aws secretsmanager create-secret --name app-secrets --region us-east-1 \
   --secret-string '{"DB_USER":"postgres","DB_PASSWORD":"your-secure-password"}'
 ```
-
-2. **Grant Jenkins IAM permissions** to access Secrets Manager:
-   - Add policy: `SecretsManagerReadWrite` to Jenkins IAM role
-   - Or create custom policy for specific secret access
-
-3. **Grant EKS Pod permissions** (using IRSA - IAM Roles for Service Accounts):
-```bash
-# Create IAM role for service account
-eksctl create iamserviceaccount \
-  --name task-manager-sa \
-  --namespace default \
-  --cluster task-manager-cluster \
-  --attach-policy-arn arn:aws:iam::aws:policy/SecretsManagerReadWrite \
-  --region us-east-1
-```
-
-### Local Development with Docker Compose
-
-Sensitive values are managed via a `.env` file that is **never committed to Git** (listed in `.gitignore`).
-
-1. Copy the example file and fill in your values:
-```bash
-cp .env.example .env
-# Then edit .env with your chosen password
-```
-
-2. Run the stack:
-```bash
-docker compose up -d
-```
-
-> **Note:** An earlier version of this project had hardcoded credentials in `docker-compose.yml`. This has been corrected — credentials are now loaded from `.env` at runtime.
-
-### Local Testing with Minikube
-
-For local testing with Minikube, create `k8s/secret.yaml` locally (not in GitHub):
-
-```bash
-# Copy from example
-cp k8s/secret.yaml.example k8s/secret.yaml
-
-# Edit with your values and encode them
-echo -n "postgres" | base64
-echo -n "supersecretpassword" | base64
-```
-
-**Important**: `k8s/secret.yaml` is in `.gitignore` and will never be committed to GitHub.
-
-### Why Not Base64?
-
-Base64 is **encoding, not encryption**. It's trivial to decode:
-```bash
-echo "cG9zdGdyZXM=" | base64 -d  # Outputs: postgres
-```
-
-Always use:
-- **AWS Secrets Manager** (recommended for EKS)
-- **HashiCorp Vault** (for multi-cloud)
-- **Sealed Secrets** or **External Secrets** (for Kubernetes-native solution)
-- **Encrypted environment files** (for local development only)
-
-## Troubleshooting
-
-### View Pod Logs
-```bash
-kubectl logs <pod-name>
-kubectl logs <pod-name> -f  # follow mode
-```
-
-### Check Deployment Status
-```bash
-kubectl describe deployment <deployment-name>
-kubectl rollout status deployment/<deployment-name>
-```
-
-### Check Health Endpoint
-```bash
-kubectl port-forward svc/backend-service 3001:3001
-curl http://localhost:3001/health
-```
-
-### Delete Resources
-```bash
-kubectl delete -f k8s/
-
-# Or delete specific resources
-kubectl delete pod <pod-name>
-kubectl delete deployment <deployment-name>
-```
-
-## Data Storage
-
-Database data is persisted in PersistentVolume. When a Pod is restarted, data is preserved.
-
-```bash
-kubectl get pvc
-kubectl describe pvc postgres-pvc
-```
-
-## Rolling Updates
-
-When pushing a new image, Kubernetes performs a rolling update:
-- One new Pod starts
-- One old Pod stops
-- Process repeats until all Pods are updated
-
-This enables Zero Downtime Updates.
-
-## Architecture Notes
-
-- Frontend communicates with Backend via Service name: `http://backend-service:3001`
-- Database must be ready before Backend starts
-- Health checks ensure only healthy Pods receive traffic
-- PersistentVolume requires StorageClass (`gp2` on AWS)
-
-## Requirements Fulfillment
-
-- ✅ 3 Backend Pods
-- ✅ 1 Frontend Pod
-- ✅ 1 Database Pod
-- ✅ Persistent Volume for Database
-- ✅ No hardcoded secrets (base64 encoded, managed via Secrets Manager)
-- ✅ Health Checks
-- ✅ Ingress (Frontend only)
-- ✅ Rolling Updates (Zero Downtime)
-- ✅ Jenkins Pipeline
-- ✅ GitHub Webhook
-- ✅ Version Tagging
-
-## Screenshots Required for Submission
-
-1. **Application Running** - Screenshot of application accessible via Ingress in browser
-2. **Jenkins Pipeline** - Screenshot of green/successful Pipeline in Jenkins
-3. **kubectl outputs**:
-   ```bash
-   kubectl get pods
-   kubectl get svc
-   kubectl get ingress
-   ```
-
----
-
-For more information: [Kubernetes Documentation](https://kubernetes.io/docs/)
-
-

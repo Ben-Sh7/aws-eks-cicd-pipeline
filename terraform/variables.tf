@@ -129,7 +129,7 @@ variable "grafana_admin_password" {
 variable "github_repo" {
   description = "GitHub repo this project lives in, as owner/repo"
   type        = string
-  default     = "Ben-Sh7/devops-task-manager"
+  default     = "Ben-Sh7/aws-eks-cicd-pipeline"
 }
 
 variable "github_username" {

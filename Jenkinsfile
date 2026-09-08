@@ -13,7 +13,7 @@ pipeline {
         FRONTEND_REPO = 'devops-task-manager-frontend'
         VERSION = "1.0.${BUILD_NUMBER}"
         GITOPS_VALUES_FILE = 'gitops/task-manager/values-images.yaml'
-        GITOPS_REPO_URL = 'github.com/Ben-Sh7/devops-task-manager.git'
+        GITOPS_REPO_URL = 'github.com/Ben-Sh7/aws-eks-cicd-pipeline.git'
         CI_BOT_NAME = 'jenkins-ci-bot'
         CI_BOT_EMAIL = 'jenkins-ci-bot@users.noreply.github.com'
     }
