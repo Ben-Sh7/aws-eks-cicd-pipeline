@@ -156,24 +156,9 @@
     </div>
 
     <script>
-        let backendUrl = '';
-
-        // פונקציה ראשונית למשיכת כתובת השרת משרת ה-Frontend שלנו
-        async function init() {
-            try {
-                const configRes = await fetch('/config');
-                const config = await configRes.json();
-                backendUrl = config.backendUrl;
-                loadTasks();
-            } catch (error) {
-                console.error('Failed to load config:', error);
-                document.getElementById('taskList').innerHTML = '<li>שגיאה בטעינת הגדרות שרת</li>';
-            }
-        }
-
         async function loadTasks() {
             try {
-                const response = await fetch(`${backendUrl}/api/tasks`);
+                const response = await fetch('/api/tasks');
                 const tasks = await response.json();
                 const list = document.getElementById('taskList');
                 list.innerHTML = '';
@@ -193,7 +178,7 @@
             if (!title) return;
 
             try {
-                await fetch(`${backendUrl}/api/tasks`, {
+                await fetch('/api/tasks', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title })
@@ -205,7 +190,7 @@
             }
         }
 
-        init();
+        loadTasks();
     </script>
 </body>
 </html>

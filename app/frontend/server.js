@@ -9,12 +9,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
 
-app.get('/config', (req, res) => {
-    res.json({
-        backendUrl: ''
-    });
-});
-
 app.get('/api/tasks', async (req, res) => {
     try {
         const response = await fetch(`${BACKEND_URL}/api/tasks`);
