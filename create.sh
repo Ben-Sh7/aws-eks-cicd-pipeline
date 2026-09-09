@@ -122,7 +122,7 @@ check_prerequisites() {
 
     # Classic tokens report their scopes in this header; fine-grained ones leave
     # it empty, so treat a missing scope there as a warning rather than a stop.
-    pat_scopes=$(grep -i '^x-oauth-scopes:' "$pat_headers" | cut -d: -f2- | tr -d ' ' || true)
+    pat_scopes=$(grep -i '^x-oauth-scopes:' "$pat_headers" | cut -d: -f2- | tr -d ' \015' || true)
     rm -f "$pat_headers"
 
     if [ -n "$pat_scopes" ]; then
@@ -232,11 +232,14 @@ configure_github_webhook() {
         exit 1
     fi
 
-    existing_id=$(echo "$list_response" | sed '$d'         | jq -r '.[] | select(.config.url // "" | test("github-webhook")) | .id' | head -1)
+    # tr -d '\015' because jq.exe on Windows emits CRLF: a carriage return in the
+    # id makes the URL below malformed, curl exits non-zero, and set -e takes
+    # the script down with no message.
+    existing_id=$(echo "$list_response" | sed '$d'         | jq -r '.[] | select(.config.url // "" | test("github-webhook")) | .id'         | tr -d '\015' | head -1)
 
     if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
         print_step "Updating existing webhook (id $existing_id) to point at $hook_url..."
-        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$auth" "$api/$existing_id"             -d "{\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\",\"secret\":\"$hook_secret\"}}")
+        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$auth" "$api/$existing_id"             -d "{\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\",\"secret\":\"$hook_secret\"}}" || echo "000")
         if [ "$write_status" != "200" ]; then
             print_error "Updating the webhook failed (HTTP $write_status)."
             exit 1
@@ -289,7 +292,7 @@ configure_argocd_webhook() {
 
     local list_response existing_id write_status
     list_response=$(curl -s -H "$auth" "$api")
-    existing_id=$(echo "$list_response"         | jq -r '.[] | select(.config.url // "" | test("/api/webhook")) | .id' | head -1)
+    existing_id=$(echo "$list_response"         | jq -r '.[] | select(.config.url // "" | test("/api/webhook")) | .id'         | tr -d '\015' | head -1)
 
     if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
         write_status=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$auth" "$api/$existing_id"             -d "{\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\",\"secret\":\"$secret_value\"}}")

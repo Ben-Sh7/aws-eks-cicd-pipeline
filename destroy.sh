@@ -9,6 +9,7 @@ PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 TERRAFORM_DIR="$PROJECT_DIR/terraform"
 ARGOCD_APP="$PROJECT_DIR/gitops/argocd-application.yaml"
 AWS_REGION="us-east-1"
+PROJECT_TAG="task-manager"
 
 # Load secrets from .env if present (gitignored - see .env.example for what's needed).
 # terraform destroy needs it too: github_pat has no default.
@@ -213,6 +214,34 @@ delete_infrastructure() {
 # names and email addresses - to whoever holds that address next. Only the two
 # hooks this project creates are touched; anything else on the repo is left
 # alone.
+# delete_monitoring_pvcs waits for the PVC objects to disappear and treats that
+# as the volumes being gone, but PV deletion is asynchronous: the CSI driver
+# only then calls DeleteVolume against AWS. terraform destroy tears that driver
+# down along with the cluster, so the call can be lost and the EBS volumes
+# survive - billed hourly, and easy to miss. This sweep runs after terraform and
+# deletes what is provably left over: volumes that are unattached AND tagged as
+# belonging to this project.
+delete_orphaned_volumes() {
+    print_header "SWEEPING UP ORPHANED EBS VOLUMES"
+
+    local vols
+    vols=$(aws ec2 describe-volumes         --filters "Name=status,Values=available" "Name=tag:Project,Values=${PROJECT_TAG}"         --query 'Volumes[].VolumeId' --output text 2>/dev/null | tr -d '' || true)
+
+    if [ -z "$vols" ] || [ "$vols" = "None" ]; then
+        print_success "No orphaned EBS volumes"
+        return 0
+    fi
+
+    local v
+    for v in $vols; do
+        if aws ec2 delete-volume --volume-id "$v" > /dev/null 2>&1; then
+            print_success "Deleted orphaned volume $v"
+        else
+            print_warning "Could not delete $v - remove it by hand, it is billed hourly."
+        fi
+    done
+}
+
 delete_github_webhooks() {
     print_header "REMOVING GITHUB WEBHOOKS"
 
@@ -237,7 +266,10 @@ delete_github_webhooks() {
 
     local api="https://api.github.com/repos/${repo}/hooks"
     local ids
-    ids=$(curl -s -H "Authorization: token $TF_VAR_github_pat" "$api"         | jq -r '.[] | select(.config.url // "" | test("github-webhook|/api/webhook")) | .id' 2>/dev/null || true)
+    # tr -d '\015': jq.exe on Windows emits CRLF, and a trailing carriage return
+    # in the id produces a malformed URL that curl rejects with exit 3 - which
+    # under set -e killed this function silently, before verify_cleanup ran.
+    ids=$(curl -s -H "Authorization: token $TF_VAR_github_pat" "$api"         | jq -r '.[] | select(.config.url // "" | test("github-webhook|/api/webhook")) | .id' 2>/dev/null         | tr -d '\015' || true)
 
     if [ -z "$ids" ]; then
         print_success "No project webhooks left on $repo"
@@ -246,7 +278,9 @@ delete_github_webhooks() {
 
     local id status
     for id in $ids; do
-        status=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE             -H "Authorization: token $TF_VAR_github_pat" "$api/$id")
+        # || echo "000": a curl that cannot even build the request exits non-zero,
+        # and an unguarded assignment under set -e aborts the whole teardown.
+        status=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE             -H "Authorization: token $TF_VAR_github_pat" "$api/$id" || true)
         if [ "$status" = "204" ]; then
             print_success "Deleted webhook $id"
         else
@@ -455,6 +489,7 @@ main() {
     delete_ingress_nginx_early
     delete_monitoring_pvcs
     delete_infrastructure
+    delete_orphaned_volumes
     delete_github_webhooks
     verify_cleanup
     show_cost_summary
