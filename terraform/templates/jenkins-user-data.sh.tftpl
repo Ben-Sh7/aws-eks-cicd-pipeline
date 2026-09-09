@@ -5,7 +5,10 @@ exec > /var/log/jenkins-bootstrap.log 2>&1
 apt-get update -y
 apt-get install -y openjdk-21-jdk docker.io awscli git curl gnupg
 
-usermod -aG docker jenkins || true
+# The jenkins user does not exist until the jenkins package is installed
+# further down, so its docker group membership is granted there, not here -
+# doing it now silently no-ops and the pipeline then fails on docker build
+# with "permission denied while trying to connect to the Docker daemon socket".
 usermod -aG docker ubuntu || true
 
 # Trivy (CVE scanner) - pinned version + checksum verification, not
@@ -23,10 +26,26 @@ mv trivy /usr/local/bin/trivy
 chmod +x /usr/local/bin/trivy
 cd /
 
-curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key -o /usr/share/keyrings/jenkins-keyring.asc
+# Jenkins rotated the apt signing key: the 2023 key (5BA31D57EF5975CA) no
+# longer matches what debian-stable is signed with, and apt dies on
+# "NO_PUBKEY 7198F4B714ABFC68". The key id is pinned and verified before it
+# is trusted, the same way Trivy is checksum-verified above - so the next
+# rotation fails loudly here instead of quietly installing an unsigned Jenkins.
+JENKINS_KEY_ID="7198F4B714ABFC68"
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key -o /usr/share/keyrings/jenkins-keyring.asc
+FOUND_KEY=$(gpg --show-keys --with-colons /usr/share/keyrings/jenkins-keyring.asc | awk -F: '/^pub/{print $5; exit}')
+if [ "$FOUND_KEY" != "$JENKINS_KEY_ID" ]; then
+  echo "Jenkins apt key is $FOUND_KEY, expected $JENKINS_KEY_ID - refusing to continue"
+  exit 1
+fi
 echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" > /etc/apt/sources.list.d/jenkins.list
 apt-get update -y
 apt-get install -y jenkins
+
+# The jenkins user exists now. It needs the docker socket because the pipeline
+# builds images; granted before jenkins first starts so the process inherits
+# the group.
+usermod -aG docker jenkins
 
 systemctl stop jenkins
 

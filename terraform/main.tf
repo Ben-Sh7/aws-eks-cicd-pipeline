@@ -29,22 +29,41 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
-# Kubernetes/Helm provider auth - short-lived token, no aws CLI dependency.
-data "aws_eks_cluster_auth" "main" {
-  name = aws_eks_cluster.main.name
+# Kubernetes/Helm provider auth. The token is fetched through the exec plugin
+# rather than data.aws_eks_cluster_auth: that data source is resolved once per
+# plan and stored in state, so on the next run Terraform configures the provider
+# with a token minted hours earlier - EKS tokens live 15 minutes, and the
+# refresh then fails with a bare "Unauthorized". exec mints one per call.
+# The aws CLI this needs is already a hard prerequisite of create.sh.
+locals {
+  eks_exec = {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.main.name, "--region", var.aws_region]
+  }
 }
 
 provider "kubernetes" {
   host                   = aws_eks_cluster.main.endpoint
   cluster_ca_certificate = base64decode(aws_eks_cluster.main.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.main.token
+
+  exec {
+    api_version = local.eks_exec.api_version
+    command     = local.eks_exec.command
+    args        = local.eks_exec.args
+  }
 }
 
 provider "helm" {
   kubernetes {
     host                   = aws_eks_cluster.main.endpoint
     cluster_ca_certificate = base64decode(aws_eks_cluster.main.certificate_authority[0].data)
-    token                  = data.aws_eks_cluster_auth.main.token
+
+    exec {
+      api_version = local.eks_exec.api_version
+      command     = local.eks_exec.command
+      args        = local.eks_exec.args
+    }
   }
 }
 
@@ -61,8 +80,10 @@ locals {
     Project     = local.project_name
     Environment = local.environment
     CreatedBy   = "Terraform"
-    CreatedDate = formatdate("YYYY-MM-DD", timestamp())
-    ManagedBy   = "IaC"
+    # No CreatedDate here: timestamp() is unknown at plan time, which turned
+    # every tagged resource into a phantom in-place update on every run and
+    # forced the (immutable) gp3-tagged StorageClass to be replaced each time.
+    ManagedBy = "IaC"
   }
 }
 

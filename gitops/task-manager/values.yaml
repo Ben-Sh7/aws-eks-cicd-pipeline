@@ -1,8 +1,13 @@
 # Image tags are overridden by values-images.yaml (bumped by Jenkins CI).
+# The image repositories are empty on purpose, for the same reason as
+# config.dbHost below: the ECR registry URL contains the AWS account id, which
+# differs per deployment, so create.sh passes both in as ArgoCD helm parameters
+# straight from the terraform ECR outputs. Hardcoding one account here means
+# every other account gets ImagePullBackOff.
 
 backend:
   image:
-    repository: 688035105164.dkr.ecr.us-east-1.amazonaws.com/devops-task-manager-backend
+    repository: ""
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 3
@@ -17,7 +22,7 @@ backend:
 
 frontend:
   image:
-    repository: 688035105164.dkr.ecr.us-east-1.amazonaws.com/devops-task-manager-frontend
+    repository: ""
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1

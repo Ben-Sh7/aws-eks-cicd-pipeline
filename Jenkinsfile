@@ -9,7 +9,6 @@ pipeline {
 
     environment {
         AWS_REGION = 'us-east-1'
-        ECR_REGISTRY = '688035105164.dkr.ecr.us-east-1.amazonaws.com'
         BACKEND_REPO = 'devops-task-manager-backend'
         FRONTEND_REPO = 'devops-task-manager-frontend'
         VERSION = "1.0.${BUILD_NUMBER}"
@@ -24,6 +23,19 @@ pipeline {
             steps {
                 checkout scm
                 echo "Repository checked out successfully"
+            }
+        }
+
+        // ECR_REGISTRY is resolved here rather than hardcoded: it embeds the
+        // AWS account id, so a literal value silently breaks every deployment
+        // into a different account (push denied, then ImagePullBackOff).
+        stage('Resolve ECR registry') {
+            steps {
+                script {
+                    def account = sh(script: 'aws sts get-caller-identity --query Account --output text', returnStdout: true).trim()
+                    env.ECR_REGISTRY = "${account}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                    echo "ECR registry: ${env.ECR_REGISTRY}"
+                }
             }
         }
 

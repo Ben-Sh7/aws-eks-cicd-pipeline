@@ -49,6 +49,15 @@ resource "aws_iam_role_policy" "jenkins_ecr_push" {
   policy = data.aws_iam_policy_document.jenkins_ecr_push.json
 }
 
+# Session Manager access. The bootstrap script sends all of its output to
+# /var/log/jenkins-bootstrap.log on the instance, which is unreadable from
+# outside without either an SSH key or SSM - and SSM is the one that does not
+# need port 22 open to the world.
+resource "aws_iam_role_policy_attachment" "jenkins_ssm" {
+  role       = aws_iam_role.jenkins.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 resource "aws_iam_instance_profile" "jenkins" {
   name_prefix = "${local.project_name}-jenkins-"
   role        = aws_iam_role.jenkins.name

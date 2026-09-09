@@ -59,7 +59,6 @@ resource "kubernetes_storage_class" "gp3_tagged" {
     tagSpecification_2 = "Environment=${local.common_tags.Environment}"
     tagSpecification_3 = "ManagedBy=${local.common_tags.ManagedBy}"
     tagSpecification_4 = "CreatedBy=${local.common_tags.CreatedBy}"
-    tagSpecification_5 = "CreatedDate=${local.common_tags.CreatedDate}"
   }
 
   depends_on = [aws_eks_addon.ebs_csi_driver]

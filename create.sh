@@ -104,7 +104,43 @@ check_prerequisites() {
         print_error "Copy .env.example to .env, fill it in, and re-run (or export it directly)."
         exit 1
     fi
-    print_success "GitHub PAT is set"
+
+    # A wrong, expired or scope-less PAT would otherwise surface ~25 minutes
+    # later as a silently broken webhook and a Jenkins job that cannot clone,
+    # so it is checked against the API here instead.
+    local pat_headers pat_status pat_scopes
+    pat_headers=$(mktemp)
+    pat_status=$(curl -s -o /dev/null -D "$pat_headers" -w '%{http_code}'         -H "Authorization: token $TF_VAR_github_pat"         -H "X-GitHub-Api-Version: 2022-11-28"         https://api.github.com/user || echo "000")
+
+    if [ "$pat_status" != "200" ]; then
+        rm -f "$pat_headers"
+        print_error "GitHub rejected TF_VAR_github_pat (HTTP $pat_status)."
+        print_error "Paste the token itself (ghp_... or github_pat_...), not the URL of the token page."
+        print_error "Create one at https://github.com/settings/tokens with 'repo' + 'admin:repo_hook'."
+        exit 1
+    fi
+
+    # Classic tokens report their scopes in this header; fine-grained ones leave
+    # it empty, so treat a missing scope there as a warning rather than a stop.
+    pat_scopes=$(grep -i '^x-oauth-scopes:' "$pat_headers" | cut -d: -f2- | tr -d ' ' || true)
+    rm -f "$pat_headers"
+
+    if [ -n "$pat_scopes" ]; then
+        case ",$pat_scopes," in
+            *,repo,*) ;;
+            *)
+                print_error "The PAT works but is missing the 'repo' scope (has: $pat_scopes)."
+                print_error "Jenkins cannot clone the repo or push the image-tag bump without it."
+                exit 1
+                ;;
+        esac
+        case ",$pat_scopes," in
+            *,admin:repo_hook,*|*,write:repo_hook,*) ;;
+            *) echo -e "${YELLOW}WARNING: PAT has no admin:repo_hook scope - webhook setup may fail (has: $pat_scopes)${NC}" ;;
+        esac
+    fi
+
+    print_success "GitHub PAT is valid${pat_scopes:+ (scopes: $pat_scopes)}"
 }
 
 create_infrastructure() {
@@ -155,19 +191,38 @@ configure_github_webhook() {
 
     local hook_url="http://${JENKINS_IP}:8080/github-webhook/"
     local api="https://api.github.com/repos/${GITHUB_REPO}/hooks"
+    local auth="Authorization: token $TF_VAR_github_pat"
 
-    local existing_id
-    existing_id=$(curl -s -H "Authorization: token $TF_VAR_github_pat" "$api" \
-        | jq -r '.[] | select(.config.url // "" | test("github-webhook")) | .id' | head -1)
+    # curl exits 0 on a 4xx, so each call is checked by status code instead - a
+    # webhook that was never created is the difference between a pipeline that
+    # works and one that silently never triggers.
+    local list_response list_status existing_id write_status
+    list_response=$(curl -s -w '
+%{http_code}' -H "$auth" "$api")
+    list_status=$(echo "$list_response" | tail -1)
+
+    if [ "$list_status" != "200" ]; then
+        print_error "Could not list the webhooks on $GITHUB_REPO (HTTP $list_status)."
+        print_error "The PAT needs 'admin:repo_hook' and admin rights on that repo."
+        exit 1
+    fi
+
+    existing_id=$(echo "$list_response" | sed '$d'         | jq -r '.[] | select(.config.url // "" | test("github-webhook")) | .id' | head -1)
 
     if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
         print_step "Updating existing webhook (id $existing_id) to point at $hook_url..."
-        curl -s -X PATCH -H "Authorization: token $TF_VAR_github_pat" "$api/$existing_id" \
-            -d "{\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\"}}" > /dev/null
+        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$auth" "$api/$existing_id"             -d "{\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\"}}")
+        if [ "$write_status" != "200" ]; then
+            print_error "Updating the webhook failed (HTTP $write_status)."
+            exit 1
+        fi
     else
         print_step "Creating webhook pointing at $hook_url..."
-        curl -s -X POST -H "Authorization: token $TF_VAR_github_pat" "$api" \
-            -d "{\"name\":\"web\",\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\"}}" > /dev/null
+        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" "$api"             -d "{\"name\":\"web\",\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\"}}")
+        if [ "$write_status" != "201" ]; then
+            print_error "Creating the webhook failed (HTTP $write_status)."
+            exit 1
+        fi
     fi
     print_success "GitHub webhook configured"
 }
@@ -183,15 +238,21 @@ register_argocd_app() {
         sleep 10
     done
 
-    # The RDS endpoint and the name AWS generated for the RDS master secret
-    # only exist after apply and change every run, so they can't live in
-    # git - they're injected here as helm parameters instead.
+    # The RDS endpoint, the name AWS generated for the RDS master secret, and
+    # the ECR registry URLs (which embed the AWS account id) only exist after
+    # apply and differ per deployment, so they can't live in git - they're
+    # injected here as helm parameters instead.
     if [ -z "$RDS_ENDPOINT" ] || [ -z "$RDS_SECRET" ]; then
         print_error "Could not read the RDS outputs from Terraform - aborting before the app is registered."
         exit 1
     fi
 
-    awk -v ep="$RDS_ENDPOINT" -v sec="$RDS_SECRET" '
+    if [ -z "$BACKEND_REPO" ] || [ -z "$FRONTEND_REPO" ]; then
+        print_error "Could not read the ECR outputs from Terraform - aborting before the app is registered."
+        exit 1
+    fi
+
+    awk -v ep="$RDS_ENDPOINT" -v sec="$RDS_SECRET" -v be="$BACKEND_REPO" -v fe="$FRONTEND_REPO" '
         { print }
         /- values-images.yaml/ {
             print "      parameters:"
@@ -199,6 +260,10 @@ register_argocd_app() {
             print "          value: \"" ep "\""
             print "        - name: secrets.awsSecretName"
             print "          value: \"" sec "\""
+            print "        - name: backend.image.repository"
+            print "          value: \"" be "\""
+            print "        - name: frontend.image.repository"
+            print "          value: \"" fe "\""
         }
     ' "$ARGOCD_APP" | kubectl apply -f -
 
