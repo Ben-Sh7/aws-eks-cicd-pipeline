@@ -83,3 +83,8 @@ output "argocd_webhook_secret_name" {
   description = "Secrets Manager entry holding the shared secret GitHub signs ArgoCD webhook payloads with. create.sh reads it to register the hook; the value is never printed."
   value       = aws_secretsmanager_secret.argocd_webhook.name
 }
+
+output "jenkins_webhook_secret_name" {
+  description = "Secrets Manager entry holding the shared secret GitHub signs Jenkins webhook payloads with. create.sh reads it to register the hook; the value is never printed."
+  value       = aws_secretsmanager_secret.jenkins_webhook.name
+}

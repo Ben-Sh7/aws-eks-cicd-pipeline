@@ -12,6 +12,11 @@ import com.cloudbees.plugins.credentials.domains.Domain
 import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl
 import com.cloudbees.plugins.credentials.CredentialsProvider
 import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials
+import org.jenkinsci.plugins.plaincredentials.StringCredentials
+import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl
+import org.jenkinsci.plugins.github.config.GitHubPluginConfig
+import org.jenkinsci.plugins.github.config.HookSecretConfig
+import hudson.util.Secret
 
 def jenkins = Jenkins.get()
 
@@ -37,6 +42,28 @@ if (!existingCred) {
     )
     SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), cred)
 }
+
+// Without this, /github-webhook/ starts a build for any POST that reaches it -
+// the only thing standing in the way is the security group. With it, Jenkins
+// verifies GitHub's HMAC signature over the payload and drops anything else, so
+// a widened security group is no longer the single point of failure.
+def hookSecretId = 'github-webhook-secret'
+def existingHookSecret = CredentialsProvider.lookupCredentials(
+    StringCredentials.class, jenkins, null, null
+).find { it.id == hookSecretId }
+
+if (!existingHookSecret) {
+    def hookCred = new StringCredentialsImpl(
+        CredentialsScope.GLOBAL, hookSecretId,
+        'Shared secret GitHub signs webhook payloads with',
+        Secret.fromString('${jenkins_webhook_secret}')
+    )
+    SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), hookCred)
+}
+
+def ghConfig = jenkins.getDescriptorByType(GitHubPluginConfig.class)
+ghConfig.setHookSecretConfigs([new HookSecretConfig(hookSecretId)])
+ghConfig.save()
 
 // Pipeline job - "Pipeline script from SCM" pointing at this repo's Jenkinsfile.
 def jobName = 'task-manager'

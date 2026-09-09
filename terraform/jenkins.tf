@@ -70,5 +70,6 @@ locals {
     github_username        = var.github_username
     github_pat             = var.github_pat
     jenkins_admin_password = random_password.jenkins_admin.result
+    jenkins_webhook_secret = random_password.jenkins_webhook.result
   })
 }

@@ -208,6 +208,16 @@ configure_github_webhook() {
     local api="https://api.github.com/repos/${GITHUB_REPO}/hooks"
     local auth="Authorization: token $TF_VAR_github_pat"
 
+    # Jenkins verifies GitHub's HMAC signature over the payload (configured by
+    # the Groovy bootstrap), so the hook has to carry the same shared secret.
+    local hook_secret_name hook_secret
+    hook_secret_name=$(cd "$TERRAFORM_DIR" && terraform output -raw jenkins_webhook_secret_name 2>/dev/null || true)
+    hook_secret=$(aws secretsmanager get-secret-value --secret-id "$hook_secret_name"         --query SecretString --output text 2>/dev/null || true)
+    if [ -z "$hook_secret" ]; then
+        print_error "Could not read the Jenkins webhook secret - GitHub deliveries would be rejected."
+        exit 1
+    fi
+
     # curl exits 0 on a 4xx, so each call is checked by status code instead - a
     # webhook that was never created is the difference between a pipeline that
     # works and one that silently never triggers.
@@ -226,14 +236,14 @@ configure_github_webhook() {
 
     if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
         print_step "Updating existing webhook (id $existing_id) to point at $hook_url..."
-        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$auth" "$api/$existing_id"             -d "{\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\"}}")
+        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$auth" "$api/$existing_id"             -d "{\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\",\"secret\":\"$hook_secret\"}}")
         if [ "$write_status" != "200" ]; then
             print_error "Updating the webhook failed (HTTP $write_status)."
             exit 1
         fi
     else
         print_step "Creating webhook pointing at $hook_url..."
-        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" "$api"             -d "{\"name\":\"web\",\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\"}}")
+        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" "$api"             -d "{\"name\":\"web\",\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\",\"secret\":\"$hook_secret\"}}")
         if [ "$write_status" != "201" ]; then
             print_error "Creating the webhook failed (HTTP $write_status)."
             exit 1

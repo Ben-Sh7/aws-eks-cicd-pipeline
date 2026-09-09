@@ -100,7 +100,7 @@ ArgoCD compares *state*, not files: it renders the chart under `path: gitops/tas
 - Grafana: ClusterIP only, reachable via `kubectl port-forward`.
 - ArgoCD: ClusterIP, with exactly one path published through the ingress - `/api/webhook`, declared `pathType: Exact`, so the UI, `/api/v1`, and the gRPC endpoint are not routable from outside. Payloads must carry GitHub's HMAC signature over a Terraform-generated shared secret, so the open path cannot be used to force syncs. The UI stays `kubectl port-forward` only.
 - Jenkins network exposure: port 8080 is reachable from GitHub's published webhook ranges (read at plan time from `api.github.com/meta`, so the rule follows GitHub) plus the single operator IP `create.sh` detects at run time. There is no SSH rule at all - the instance is reached through SSM Session Manager, which needs no inbound port. This matters because that host holds the GitHub PAT and ECR push rights.
-- Jenkins itself: authenticated (single admin account), not left open on the setup wizard's default of no login.
+- Jenkins itself: authenticated (single admin account), not left open on the setup wizard's default of no login. Its webhook endpoint verifies GitHub's HMAC signature over the payload, so reaching port 8080 is not by itself enough to start a build - the network restriction above is no longer the only thing in the way.
 - Database connections: RDS runs with `rds.force_ssl=1` and the backend verifies the server certificate against the Amazon RDS CA bundle baked into its image, rather than the usual `rejectUnauthorized: false`, which encrypts without authenticating.
 - Runtime images: built on a current Node LTS with `npm` left out of the runtime stage - `npm`'s own bundled dependencies were the last HIGH findings standing between the image and a clean Trivy scan.
 - CI: Trivy scans both images for HIGH/CRITICAL CVEs and fails the build before anything reaches ECR - installed on the Jenkins EC2 pinned to a fixed, checksum-verified version, not a floating "latest" tag (Trivy's own release pipeline was compromised twice in 2026 via poisoned releases/tags).
@@ -123,7 +123,7 @@ See `destroy.sh` for the full script.
 | RDS is single-AZ, no read replica | `multi_az = true` when uptime matters more than cost |
 | ECR repo names don't match `project_name` | Intentional - repos already hold image history |
 | The four add-on Helm releases install one after another, not in parallel | Required: the Helm provider shares one repository cache across concurrent `helm_release` resources and all but one fail with "no cached repo found". Costs a few minutes per run |
-| The Jenkins webhook is not HMAC-signed | Its network path is restricted to GitHub's own ranges instead |
+| Worker nodes sit in public subnets with public IPs | Their security group admits only the cluster's own SG and the ingress load balancer's SG - nothing from the internet. Private subnets would need a NAT gateway (~$32/month) for image pulls |
 
 ## Jenkins Bootstrap
 
