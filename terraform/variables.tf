@@ -172,6 +172,12 @@ variable "github_username" {
   default     = "Ben-Sh7"
 }
 
+variable "jenkins_ui_allowed_cidrs" {
+  description = "CIDRs allowed to reach the Jenkins UI on 8080. create.sh sets this to the public IP it runs from; GitHub's webhook ranges are allowed separately and do not belong here. Empty means the UI is unreachable, which is the safe default rather than 0.0.0.0/0."
+  type        = list(string)
+  default     = []
+}
+
 variable "github_pat" {
   description = "GitHub Personal Access Token (repo + admin:repo_hook scopes). Required, no default - bootstraps the Jenkins job/credential and lets create.sh manage the GitHub webhook."
   type        = string

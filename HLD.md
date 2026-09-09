@@ -8,7 +8,7 @@ flowchart TD
     GH -->|webhook| JK["Jenkins CI<br/>build → push → bump tag"]
     JK -->|docker push| ECR[(AWS ECR)]
     JK -->|commit values-images.yaml| GH
-    GH -->|watches repo| ARGO["ArgoCD CD<br/>sync Helm chart"]
+    GH -->|"webhook (poll every 180s as fallback)"| ARGO["ArgoCD CD<br/>sync Helm chart"]
     ARGO -->|deploys| EKS["EKS Cluster<br/>frontend / backend"]
     EKS -->|private subnet only| RDS[(RDS Postgres)]
     ASM[(AWS Secrets Manager)] -->|IRSA| ESO[External Secrets Operator]
@@ -71,11 +71,13 @@ flowchart TD
 
 **CI (Jenkins):** push → build image → push to ECR → bump image tag in `values-images.yaml` → commit + push.
 
-**CD (ArgoCD):** watches the repo → merges `values.yaml` + `values-images.yaml` → syncs the Helm chart → Kubernetes rolls out the new pods.
+**CD (ArgoCD):** GitHub webhook (or the 180s reconciliation poll, whichever comes first) → merges `values.yaml` + `values-images.yaml` → syncs the Helm chart → Kubernetes rolls out the new pods.
+
+ArgoCD compares *state*, not files: it renders the chart under `path: gitops/task-manager` and diffs the result against the live cluster. A commit that touches only `terraform/` or `app/` renders identical manifests and changes nothing. Equally, a change made directly against the cluster with `kubectl edit` matches no commit at all and is still reverted, because `selfHeal` acts on the diff rather than on a file event.
 
 **Secrets (External Secrets Operator):** reads the RDS master secret - which AWS generates and rotates itself, so the password never enters Terraform state or git - from Secrets Manager via IRSA → creates/refreshes the `app-secret` K8s Secret → backend pods read it as `DB_USER`/`DB_PASSWORD`.
 
-**Wiring the dynamic values:** the RDS endpoint and the name AWS gives its master secret only exist after `terraform apply` and change on every run, so they can't be committed to git. `create.sh` reads them from `terraform output` and injects them into the ArgoCD Application as helm parameters, which keeps the chart itself fully generic.
+**Wiring the dynamic values:** the RDS endpoint, the name AWS gives its master secret, and the two ECR registry URLs (which embed the AWS account id) only exist after `terraform apply` and differ per deployment, so they can't be committed to git. `create.sh` reads them from `terraform output` and injects them into the ArgoCD Application as helm parameters, which keeps the chart itself fully generic - deploying into a different AWS account needs no edit to the chart.
 
 ## Components
 
@@ -95,8 +97,12 @@ flowchart TD
 - Jenkins: IAM instance profile scoped to ECR push only - no static AWS keys, no cluster access.
 - External Secrets Operator: IRSA, read-only, scoped to the RDS master secret's exact ARN.
 - RDS: private subnets, `publicly_accessible = false`, storage encrypted, port 5432 open only to the EKS nodes' security group. Master password generated and rotated by AWS - never in Terraform state.
-- Grafana + ArgoCD: ClusterIP only, reachable via `kubectl port-forward`.
+- Grafana: ClusterIP only, reachable via `kubectl port-forward`.
+- ArgoCD: ClusterIP, with exactly one path published through the ingress - `/api/webhook`, declared `pathType: Exact`, so the UI, `/api/v1`, and the gRPC endpoint are not routable from outside. Payloads must carry GitHub's HMAC signature over a Terraform-generated shared secret, so the open path cannot be used to force syncs. The UI stays `kubectl port-forward` only.
+- Jenkins network exposure: port 8080 is reachable from GitHub's published webhook ranges (read at plan time from `api.github.com/meta`, so the rule follows GitHub) plus the single operator IP `create.sh` detects at run time. There is no SSH rule at all - the instance is reached through SSM Session Manager, which needs no inbound port. This matters because that host holds the GitHub PAT and ECR push rights.
 - Jenkins itself: authenticated (single admin account), not left open on the setup wizard's default of no login.
+- Database connections: RDS runs with `rds.force_ssl=1` and the backend verifies the server certificate against the Amazon RDS CA bundle baked into its image, rather than the usual `rejectUnauthorized: false`, which encrypts without authenticating.
+- Runtime images: built on a current Node LTS with `npm` left out of the runtime stage - `npm`'s own bundled dependencies were the last HIGH findings standing between the image and a clean Trivy scan.
 - CI: Trivy scans both images for HIGH/CRITICAL CVEs and fails the build before anything reaches ECR - installed on the Jenkins EC2 pinned to a fixed, checksum-verified version, not a floating "latest" tag (Trivy's own release pipeline was compromised twice in 2026 via poisoned releases/tags).
 
 ## Cleanup Order
@@ -115,6 +121,8 @@ See `destroy.sh` for the full script.
 |---|---|
 | RDS is single-AZ, no read replica | `multi_az = true` when uptime matters more than cost |
 | ECR repo names don't match `project_name` | Intentional - repos already hold image history |
+| The four add-on Helm releases install one after another, not in parallel | Required: the Helm provider shares one repository cache across concurrent `helm_release` resources and all but one fail with "no cached repo found". Costs a few minutes per run |
+| The Jenkins webhook is not HMAC-signed | Its network path is restricted to GitHub's own ranges instead |
 
 ## Jenkins Bootstrap
 
@@ -123,7 +131,9 @@ See `destroy.sh` for the full script.
 2. Creates the `github-credentials` credential from `github_pat`
 3. Creates the `task-manager` Pipeline job (SCM = this repo, Script Path = `Jenkinsfile`, GitHub push trigger)
 
-`create.sh` then points the GitHub webhook at the new EC2's IP (re-pointing it every run, since the IP changes each time).
+The Jenkins apt signing key is pinned *and* its key id is verified before the repository is trusted, so a key rotation on Jenkins' side fails the bootstrap loudly instead of silently installing from an unsigned repository.
+
+`create.sh` then points the GitHub webhook at the new EC2's IP (re-pointing it every run, since the IP changes each time) and registers the second webhook that drives ArgoCD.
 
 ## Deployment
 

@@ -141,6 +141,21 @@ check_prerequisites() {
     fi
 
     print_success "GitHub PAT is valid${pat_scopes:+ (scopes: $pat_scopes)}"
+
+    # The Jenkins security group opens 8080 to this address and to GitHub's
+    # webhook ranges, nothing else. Detected rather than hardcoded, so a
+    # changing home IP does not quietly lock the UI out on the next run.
+    if [ -z "$TF_VAR_jenkins_ui_allowed_cidrs" ]; then
+        local my_ip
+        my_ip=$(curl -s --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]' || true)
+        if echo "$my_ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            export TF_VAR_jenkins_ui_allowed_cidrs="[\"$my_ip/32\"]"
+            print_success "Jenkins UI will be reachable from $my_ip/32 only"
+        else
+            echo -e "${YELLOW}WARNING: could not detect this machine's public IP - the Jenkins UI will not be reachable.${NC}"
+            echo -e "${YELLOW}Set TF_VAR_jenkins_ui_allowed_cidrs='[\"x.x.x.x/32\"]' to override.${NC}"
+        fi
+    fi
 }
 
 create_infrastructure() {
@@ -225,6 +240,56 @@ configure_github_webhook() {
         fi
     fi
     print_success "GitHub webhook configured"
+
+    configure_argocd_webhook
+}
+
+# Without this ArgoCD only notices a new image tag on its next 180s poll. The
+# hook targets the one path published for it (see terraform/argocd-webhook.tf);
+# a failure here is not fatal, it just leaves ArgoCD polling as before.
+configure_argocd_webhook() {
+    print_step "Registering the ArgoCD webhook so deploys skip its 3-minute poll..."
+
+    local lb=""
+    local i
+    for i in $(seq 1 30); do
+        lb=$(kubectl get svc -n ingress-nginx ingress-nginx-controller             -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+        [ -n "$lb" ] && break
+        sleep 10
+    done
+
+    if [ -z "$lb" ]; then
+        echo -e "${YELLOW}WARNING: the ingress LoadBalancer has no hostname yet - skipping the ArgoCD webhook.${NC}"
+        echo -e "${YELLOW}ArgoCD still syncs on its own poll; re-run create.sh to add the hook.${NC}"
+        return 0
+    fi
+
+    local secret_name secret_value
+    secret_name=$(cd "$TERRAFORM_DIR" && terraform output -raw argocd_webhook_secret_name 2>/dev/null || true)
+    secret_value=$(aws secretsmanager get-secret-value --secret-id "$secret_name"         --query SecretString --output text 2>/dev/null || true)
+
+    if [ -z "$secret_value" ]; then
+        echo -e "${YELLOW}WARNING: could not read the ArgoCD webhook secret - skipping.${NC}"
+        return 0
+    fi
+
+    local hook_url="http://${lb}/api/webhook"
+    local api="https://api.github.com/repos/${GITHUB_REPO}/hooks"
+    local auth="Authorization: token $TF_VAR_github_pat"
+
+    local list_response existing_id write_status
+    list_response=$(curl -s -H "$auth" "$api")
+    existing_id=$(echo "$list_response"         | jq -r '.[] | select(.config.url // "" | test("/api/webhook")) | .id' | head -1)
+
+    if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
+        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$auth" "$api/$existing_id"             -d "{\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\",\"secret\":\"$secret_value\"}}")
+        [ "$write_status" = "200" ] || { echo -e "${YELLOW}WARNING: updating the ArgoCD webhook returned HTTP $write_status.${NC}"; return 0; }
+    else
+        write_status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" "$api"             -d "{\"name\":\"web\",\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"$hook_url\",\"content_type\":\"json\",\"secret\":\"$secret_value\"}}")
+        [ "$write_status" = "201" ] || { echo -e "${YELLOW}WARNING: creating the ArgoCD webhook returned HTTP $write_status.${NC}"; return 0; }
+    fi
+
+    print_success "ArgoCD webhook configured ($hook_url)"
 }
 
 register_argocd_app() {

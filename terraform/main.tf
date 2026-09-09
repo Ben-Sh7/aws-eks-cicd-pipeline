@@ -20,6 +20,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    http = {
+      source  = "hashicorp/http"
+      version = "~> 3.4"
+    }
   }
 }
 
@@ -182,26 +186,57 @@ resource "aws_security_group" "eks" {
   )
 }
 
+# GitHub publishes the source ranges its webhooks are delivered from. Reading
+# them here keeps the Jenkins ingress rule correct without pinning a list that
+# silently goes stale - if this endpoint is unreachable the plan fails loudly
+# rather than falling back to 0.0.0.0/0.
+data "http" "github_meta" {
+  url = "https://api.github.com/meta"
+  request_headers = {
+    Accept = "application/vnd.github+json"
+  }
+}
+
+locals {
+  github_hook_cidrs = [
+    for c in jsondecode(data.http.github_meta.response_body).hooks : c
+    if !strcontains(c, ":")
+  ]
+}
+
 resource "aws_security_group" "jenkins" {
   name_prefix = "${local.project_name}-jenkins-"
   description = "Security group for Jenkins EC2 instance"
   vpc_id      = aws_vpc.main.id
 
+  # GitHub has to reach /github-webhook/ to trigger builds, so 8080 cannot be
+  # closed outright - but it does not need to be open to the internet either.
+  # These are GitHub's own published hook source ranges, read at plan time.
   ingress {
-    description = "Jenkins web UI"
+    description = "Jenkins webhook endpoint - GitHub published hook ranges"
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = local.github_hook_cidrs
   }
 
-  ingress {
-    description = "SSH access"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  # Human access to the Jenkins UI. create.sh fills this with the public IP it
+  # is running from; empty means nobody but GitHub can reach 8080.
+  dynamic "ingress" {
+    for_each = length(var.jenkins_ui_allowed_cidrs) > 0 ? [1] : []
+    content {
+      description = "Jenkins web UI, operator access only"
+      from_port   = 8080
+      to_port     = 8080
+      protocol    = "tcp"
+      cidr_blocks = var.jenkins_ui_allowed_cidrs
+    }
   }
+
+  # No SSH rule on purpose. The instance is reached through SSM Session Manager
+  # (see the AmazonSSMManagedInstanceCore attachment in jenkins.tf), which needs
+  # no inbound port at all - port 22 open to 0.0.0.0/0 on a host holding the
+  # GitHub PAT and ECR push rights was the single largest hole here.
 
   egress {
     description = "Allow all outbound traffic"

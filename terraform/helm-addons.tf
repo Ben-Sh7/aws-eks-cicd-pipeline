@@ -81,9 +81,15 @@ resource "helm_release" "kube_prometheus_stack" {
     value = var.grafana_storage_size
   }
 
+  # Serialised behind ingress-nginx on purpose. The helm provider shares one
+  # repository cache and config file across parallel helm_release resources, so
+  # creating them concurrently makes all but one fail with "no cached repo
+  # found" - on a clean machine that breaks create.sh every time. Chaining costs
+  # a few minutes and needs no extra tooling or a warm cache.
   depends_on = [
     aws_eks_node_group.main,
-    kubernetes_storage_class.gp3_tagged
+    kubernetes_storage_class.gp3_tagged,
+    helm_release.ingress_nginx
   ]
 }
 
@@ -97,12 +103,21 @@ resource "helm_release" "argocd" {
   timeout          = 600
 
   set {
-    # ClusterIP - same reasoning as Grafana above.
+    # ClusterIP - same reasoning as Grafana above. The only thing reachable from
+    # outside is the /api/webhook path, via the dedicated ingress in
+    # argocd-webhook.tf; the UI and the rest of the API stay port-forward only.
     name  = "server.service.type"
     value = "ClusterIP"
   }
 
-  depends_on = [aws_eks_node_group.main]
+  # Shared secret GitHub signs its webhook payloads with. Without it ArgoCD
+  # accepts unauthenticated pokes on /api/webhook from anyone who can reach it.
+  set_sensitive {
+    name  = "configs.secret.githubSecret"
+    value = random_password.argocd_webhook.result
+  }
+
+  depends_on = [aws_eks_node_group.main, helm_release.kube_prometheus_stack]
 }
 
 resource "helm_release" "external_secrets" {
@@ -119,5 +134,5 @@ resource "helm_release" "external_secrets" {
     value = aws_iam_role.external_secrets.arn
   }
 
-  depends_on = [aws_eks_node_group.main, aws_iam_openid_connect_provider.eks]
+  depends_on = [aws_eks_node_group.main, aws_iam_openid_connect_provider.eks, helm_release.argocd]
 }
