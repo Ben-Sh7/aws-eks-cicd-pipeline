@@ -1,10 +1,22 @@
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const fs = require('fs');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// RDS runs with rds.force_ssl=1 and rejects plaintext connections with
+// "no pg_hba.conf entry ... no encryption". DB_SSL_CA points at the Amazon RDS
+// CA bundle baked into the image, so the server certificate is verified rather
+// than trusted blindly - rejectUnauthorized:false would encrypt the traffic but
+// accept any certificate at all. Unset for the local docker-compose Postgres,
+// which speaks plaintext on the compose network.
+const caPath = process.env.DB_SSL_CA;
+const ssl = caPath
+    ? { ca: fs.readFileSync(caPath, 'utf8'), rejectUnauthorized: true }
+    : false;
 
 const pool = new Pool({
     user: process.env.DB_USER || 'postgres',
@@ -12,6 +24,7 @@ const pool = new Pool({
     database: process.env.DB_NAME || 'tasksdb',
     password: process.env.DB_PASSWORD || 'postgres',
     port: process.env.DB_PORT || 5432,
+    ssl,
 });
 
 app.post('/api/tasks', async (req, res) => {

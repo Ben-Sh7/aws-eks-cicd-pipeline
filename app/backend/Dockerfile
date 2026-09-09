@@ -13,6 +13,9 @@ RUN npm ci --omit=dev
 FROM node:24-alpine
 RUN apk --no-cache upgrade  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 WORKDIR /app
+# RDS enforces TLS, and the app verifies the server certificate against this
+# bundle instead of disabling verification.
+ADD --chown=node:node https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/rds-ca.pem
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node . .
 USER node

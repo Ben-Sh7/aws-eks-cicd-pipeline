@@ -44,6 +44,10 @@ config:
   dbName: tasksdb
   backendUrl: http://backend-service:3001
   backendPort: "3001"
+  # Path to the Amazon RDS CA bundle inside the backend image. Set means the
+  # DB connection is TLS with certificate verification; empty means plaintext,
+  # which only makes sense against a local Postgres.
+  dbSslCa: /app/rds-ca.pem
 
 # mode: externalSecrets (default) - pulls the RDS master credentials from
 #   AWS Secrets Manager via the External Secrets Operator. No real

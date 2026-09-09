@@ -59,12 +59,18 @@ resource "aws_security_group" "rds" {
   description = "Postgres access from the EKS nodes only"
   vpc_id      = aws_vpc.main.id
 
+  # This must be the cluster security group EKS creates and attaches to the
+  # managed node group's instances - not aws_security_group.eks, which is an
+  # "additional" security group and lands on the control plane ENIs only. With
+  # the wrong one here the nodes' traffic is silently dropped: the backend's
+  # pool.query() hangs instead of failing, so the pod logs nothing and never
+  # reaches app.listen().
   ingress {
-    description     = "Postgres from EKS nodes"
+    description     = "Postgres from the EKS nodes"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [aws_security_group.eks.id]
+    security_groups = [aws_eks_cluster.main.vpc_config[0].cluster_security_group_id]
   }
 
   tags = merge(

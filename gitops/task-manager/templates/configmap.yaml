@@ -11,3 +11,6 @@ data:
   DB_NAME: {{ .Values.config.dbName | quote }}
   BACKEND_URL: {{ .Values.config.backendUrl | quote }}
   PORT: {{ .Values.config.backendPort | quote }}
+  {{- if .Values.config.dbSslCa }}
+  DB_SSL_CA: {{ .Values.config.dbSslCa | quote }}
+  {{- end }}
