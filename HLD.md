@@ -111,7 +111,8 @@ ArgoCD compares *state*, not files: it renders the chart under `path: gitops/tas
 2. Uninstall ingress-nginx, wait for its Load Balancer to release
 3. Delete the monitoring PVCs - Prometheus/Alertmanager volumes come from StatefulSet templates, which neither `helm uninstall` nor `terraform destroy` removes, so their EBS volumes would outlive the cluster and keep billing
 4. `terraform destroy` (RDS included - no final snapshot, so nothing is left to pay for)
-5. `verify_cleanup()` checks AWS directly for anything left over
+5. Delete the two GitHub webhooks. The Jenkins EC2's public IP goes back to AWS's pool and is reassigned to another customer, so a webhook left behind would keep posting this repo's push payloads - commit messages, author names and emails - to a stranger's server
+6. `verify_cleanup()` checks AWS directly for anything left over
 
 See `destroy.sh` for the full script.
 

@@ -207,6 +207,54 @@ delete_infrastructure() {
     cd "$PROJECT_DIR"
 }
 
+# The Jenkins EC2's public IP returns to AWS's pool and gets handed to another
+# customer; the load balancer hostname stops resolving. A webhook left pointing
+# at either keeps delivering this repo's push payloads - commit messages, author
+# names and email addresses - to whoever holds that address next. Only the two
+# hooks this project creates are touched; anything else on the repo is left
+# alone.
+delete_github_webhooks() {
+    print_header "REMOVING GITHUB WEBHOOKS"
+
+    if [ -z "$TF_VAR_github_pat" ]; then
+        print_warning "TF_VAR_github_pat is not set - the webhooks are still in place."
+        print_warning "Delete them under Settings -> Webhooks; they now point at addresses you no longer own."
+        return 0
+    fi
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq is not installed - cannot read the webhook list, leaving them in place."
+        return 0
+    fi
+
+    local repo
+    repo=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null         | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##' || true)
+
+    if [ -z "$repo" ]; then
+        print_warning "Could not determine the GitHub repo from the git remote - skipping."
+        return 0
+    fi
+
+    local api="https://api.github.com/repos/${repo}/hooks"
+    local ids
+    ids=$(curl -s -H "Authorization: token $TF_VAR_github_pat" "$api"         | jq -r '.[] | select(.config.url // "" | test("github-webhook|/api/webhook")) | .id' 2>/dev/null || true)
+
+    if [ -z "$ids" ]; then
+        print_success "No project webhooks left on $repo"
+        return 0
+    fi
+
+    local id status
+    for id in $ids; do
+        status=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE             -H "Authorization: token $TF_VAR_github_pat" "$api/$id")
+        if [ "$status" = "204" ]; then
+            print_success "Deleted webhook $id"
+        else
+            print_warning "Could not delete webhook $id (HTTP $status) - remove it by hand."
+        fi
+    done
+}
+
 verify_cleanup() {
     print_header "VERIFYING CLEANUP - CHECKING FOR ORPHANED RESOURCES"
 
@@ -407,6 +455,7 @@ main() {
     delete_ingress_nginx_early
     delete_monitoring_pvcs
     delete_infrastructure
+    delete_github_webhooks
     verify_cleanup
     show_cost_summary
 
