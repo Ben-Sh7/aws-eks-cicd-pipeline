@@ -1,13 +1,14 @@
-# Registers the app with ArgoCD. Applied once (manually or via ./create.sh)
-# after ArgoCD is up. From here on, ArgoCD watches this repo and deploys
-# the app itself.
+# Registers the app with ArgoCD. Apply it with ./create.sh, not by hand:
+# create.sh appends the RDS endpoint and master-secret name as helm
+# parameters, and the app can't reach its database without them.
+# From there on, ArgoCD watches this repo and deploys the app itself.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: task-manager
   namespace: argocd
   # Makes `kubectl delete` cascade: deletes everything this app owns
-  # (Deployments, Services, Ingress, PVC) before removing the Application.
+  # (Deployments, Services, Ingress) before removing the Application.
   # destroy.sh relies on this - do not remove.
   finalizers:
     - resources-finalizer.argocd.argoproj.io

@@ -1,8 +1,3 @@
-# ============================================
-# Terraform Variables - Easy Configuration
-# ============================================
-# Change these values to customize your deployment
-
 variable "aws_region" {
   description = "AWS region"
   type        = string
@@ -21,9 +16,6 @@ variable "environment" {
   default     = "learning"
 }
 
-# ============================================
-# VPC Configuration
-# ============================================
 variable "vpc_cidr" {
   description = "VPC CIDR block"
   type        = string
@@ -42,9 +34,48 @@ variable "public_subnet_2_cidr" {
   default     = "10.0.2.0/24"
 }
 
-# ============================================
-# EKS Configuration
-# ============================================
+variable "private_subnet_1_cidr" {
+  description = "Private subnet 1 CIDR block (RDS)"
+  type        = string
+  default     = "10.0.11.0/24"
+}
+
+variable "private_subnet_2_cidr" {
+  description = "Private subnet 2 CIDR block (RDS)"
+  type        = string
+  default     = "10.0.12.0/24"
+}
+
+variable "rds_engine_version" {
+  description = "Postgres major version - AWS picks the latest minor"
+  type        = string
+  default     = "16"
+}
+
+variable "rds_instance_class" {
+  description = "RDS instance class (db.t4g.micro is free-tier eligible)"
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "rds_allocated_storage" {
+  description = "RDS storage in GB (20 is the free-tier maximum)"
+  type        = number
+  default     = 20
+}
+
+variable "rds_db_name" {
+  description = "Database name created inside the RDS instance"
+  type        = string
+  default     = "tasksdb"
+}
+
+variable "rds_username" {
+  description = "RDS master username"
+  type        = string
+  default     = "postgres"
+}
+
 variable "kubernetes_version" {
   description = "Kubernetes version for EKS cluster"
   type        = string
@@ -75,9 +106,6 @@ variable "node_max_size" {
   default     = 3
 }
 
-# ============================================
-# EC2 Configuration (Jenkins)
-# ============================================
 variable "jenkins_instance_type" {
   description = "EC2 instance type for Jenkins"
   type        = string
@@ -90,9 +118,6 @@ variable "jenkins_root_volume_size" {
   default     = 20
 }
 
-# ============================================
-# Helm Add-ons (ingress-nginx, kube-prometheus-stack, argocd, external-secrets)
-# ============================================
 variable "ingress_nginx_chart_version" {
   description = "Pinned ingress-nginx Helm chart version"
   type        = string
@@ -117,15 +142,24 @@ variable "external_secrets_chart_version" {
   default     = "0.10.4"
 }
 
-variable "grafana_admin_password" {
-  description = "Grafana admin password. Required, no default - set via TF_VAR_grafana_admin_password."
+variable "prometheus_storage_size" {
+  description = "PVC size for Prometheus metrics"
   type        = string
-  sensitive   = true
+  default     = "10Gi"
 }
 
-# ============================================
-# Jenkins Bootstrap (auto-provisioning)
-# ============================================
+variable "prometheus_retention" {
+  description = "How long Prometheus keeps metrics"
+  type        = string
+  default     = "15d"
+}
+
+variable "grafana_storage_size" {
+  description = "PVC size for Grafana dashboards/settings"
+  type        = string
+  default     = "5Gi"
+}
+
 variable "github_repo" {
   description = "GitHub repo this project lives in, as owner/repo"
   type        = string
@@ -144,8 +178,3 @@ variable "github_pat" {
   sensitive   = true
 }
 
-variable "jenkins_admin_password" {
-  description = "Jenkins admin login password. Required, no default - fails closed instead of leaving Jenkins with no authentication."
-  type        = string
-  sensitive   = true
-}

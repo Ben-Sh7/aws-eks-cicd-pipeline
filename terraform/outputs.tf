@@ -43,13 +43,31 @@ output "external_secrets_role_arn" {
   description = "IRSA role bound to the external-secrets ServiceAccount"
 }
 
+# Both are only known after apply, and both change on every create.sh run -
+# create.sh feeds them to the chart as ArgoCD helm parameters.
+output "rds_endpoint" {
+  value       = aws_db_instance.postgres.address
+  description = "RDS Postgres hostname - the app's DB_HOST"
+}
+
+output "rds_master_secret_name" {
+  value       = aws_db_instance.postgres.master_user_secret[0].secret_arn
+  description = "ARN of the AWS-managed RDS master secret that External Secrets reads"
+}
+
 # Instructions only - never the password itself, even as a sensitive output.
 output "grafana_access_instructions" {
   value       = <<-EOT
     kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
-    http://localhost:3000 - user: admin, password: your TF_VAR_grafana_admin_password
+    http://localhost:3000 - user: admin, password:
+      aws secretsmanager get-secret-value --secret-id ${aws_secretsmanager_secret.grafana_admin.name} --query SecretString --output text
   EOT
   description = "How to reach Grafana (ClusterIP only)"
+}
+
+output "jenkins_password_command" {
+  value       = "aws secretsmanager get-secret-value --secret-id ${aws_secretsmanager_secret.jenkins_admin.name} --query SecretString --output text"
+  description = "Reads the generated Jenkins admin password"
 }
 
 output "argocd_access_instructions" {

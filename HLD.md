@@ -9,14 +9,17 @@ flowchart TD
     JK -->|docker push| ECR[(AWS ECR)]
     JK -->|commit values-images.yaml| GH
     GH -->|watches repo| ARGO["ArgoCD CD<br/>sync Helm chart"]
-    ARGO -->|deploys| EKS["EKS Cluster<br/>frontend / backend / postgres"]
+    ARGO -->|deploys| EKS["EKS Cluster<br/>frontend / backend"]
+    EKS -->|private subnet only| RDS[(RDS Postgres)]
     ASM[(AWS Secrets Manager)] -->|IRSA| ESO[External Secrets Operator]
     ESO -->|creates K8s Secret| EKS
+    RDS -.->|AWS-managed master password| ASM
     EKS --> MON[Prometheus / Grafana]
 
     style GH fill:#24292e,color:#fff
     style ECR fill:#ff9900,color:#000
     style ASM fill:#ff9900,color:#000
+    style RDS fill:#3b48cc,color:#fff
     style EKS fill:#326ce5,color:#fff
     style ARGO fill:#ef7b4d,color:#fff
     style JK fill:#d33833,color:#fff
@@ -41,17 +44,16 @@ flowchart TD
             BE3["backend pod #3"]
         end
 
-        DB["postgres-service · ClusterIP<br/>1 pod"]
-
         FE -->|"internal DNS name<br/>not reachable from outside"| BESVC
-        BE1 & BE2 & BE3 -->|"internal DNS name<br/>not reachable from outside"| DB
     end
+
+    BE1 & BE2 & BE3 -->|"private subnet, SG-restricted"| DB[("RDS Postgres<br/>private subnets")]
 
     ING --> FE
 
     classDef public fill:#009639,color:#fff
     classDef internal fill:#1a73e8,color:#fff
-    classDef db fill:#336791,color:#fff
+    classDef db fill:#3b48cc,color:#fff
     classDef user fill:#555,color:#fff
     class ING public
     class FE,BE1,BE2,BE3 internal
@@ -61,9 +63,9 @@ flowchart TD
     style BESVC fill:#0b1f3a,color:#fff,stroke:#1a73e8,stroke-width:1px
 ```
 
-**Why this is locked down, not just "it works":** every Service in the chart (`frontend-service`, `backend-service`, `postgres-service`) is `type: ClusterIP` - reachable only from inside the cluster's own network, with no direct pod IP, no NodePort, and no public IP of any kind. `ingress-nginx` is the *only* Service of type `LoadBalancer`, meaning it's the only thing with a public AWS ELB in front of it. A user (or an attacker) outside the cluster has no path to the backend or the database directly - every request must go through the ingress, which only forwards to `frontend-service`. The frontend then calls the backend over the internal ClusterIP, and only the backend can reach Postgres - the database is never one hop away from the internet.
+**Why this is locked down, not just "it works":** both app Services (`frontend-service`, `backend-service`) are `type: ClusterIP` - reachable only from inside the cluster's own network, with no direct pod IP, no NodePort, and no public IP. `ingress-nginx` is the *only* Service of type `LoadBalancer`, so it's the only thing with a public AWS ELB in front of it. RDS sits in private subnets with `publicly_accessible = false`, and its security group accepts port 5432 from the EKS nodes' security group only - not from a CIDR range, and not from the internet at all. Every request must enter through the ingress, which only forwards to `frontend-service`; the frontend calls the backend internally, and only the backend can reach the database.
 
-**Pod counts and why:** backend runs 3 replicas (stateless, so scaling it is free and gives some redundancy); frontend runs 1 (a static/lightweight proxy layer, no state, low value in replicating for a portfolio-scale app); Postgres runs 1 (see Known Limitations - a single stateful pod, not HA). These aren't fixed forever - `backend.replicaCount` etc. in `values.yaml` are just numbers ArgoCD applies on every sync.
+**Replica counts and why:** backend runs 3 replicas (stateless, so scaling it is free and gives some redundancy); frontend runs 1 (a lightweight proxy layer, no state). These aren't fixed forever - `backend.replicaCount` etc. in `values.yaml` are just numbers ArgoCD applies on every sync.
 
 ## Key Flows
 
@@ -71,34 +73,39 @@ flowchart TD
 
 **CD (ArgoCD):** watches the repo → merges `values.yaml` + `values-images.yaml` → syncs the Helm chart → Kubernetes rolls out the new pods.
 
-**Secrets (External Secrets Operator):** reads `app-secrets` from AWS Secrets Manager via IRSA → creates/refreshes the `app-secret` K8s Secret → backend/postgres pods read it normally.
+**Secrets (External Secrets Operator):** reads the RDS master secret - which AWS generates and rotates itself, so the password never enters Terraform state or git - from Secrets Manager via IRSA → creates/refreshes the `app-secret` K8s Secret → backend pods read it as `DB_USER`/`DB_PASSWORD`.
+
+**Wiring the dynamic values:** the RDS endpoint and the name AWS gives its master secret only exist after `terraform apply` and change on every run, so they can't be committed to git. `create.sh` reads them from `terraform output` and injects them into the ArgoCD Application as helm parameters, which keeps the chart itself fully generic.
 
 ## Components
 
 | Component | Tool | Responsibility |
 |---|---|---|
-| Infra + cluster add-ons | Terraform | VPC/EKS/EC2/ECR + ingress-nginx, kube-prometheus-stack, argocd, external-secrets |
-| CI | Jenkins | Build, tag, push image, bump the GitOps tag file |
+| Infra + cluster add-ons | Terraform | VPC/EKS/EC2/ECR/RDS + ingress-nginx, kube-prometheus-stack, argocd, external-secrets, EBS CSI driver |
+| CI | Jenkins | Build, scan (Trivy), push image, bump the GitOps tag file |
 | CD | ArgoCD | Applies the Helm chart, self-heals drift, prunes removed resources |
-| Secrets sync | External Secrets Operator | Syncs `app-secrets` from AWS Secrets Manager into a K8s Secret |
-| App packaging | Helm chart (`gitops/task-manager`) | backend + frontend + postgres + configmap + secret/externalsecret + pvc + ingress |
+| Database | RDS Postgres | Private subnets, SG-restricted to the EKS nodes, AWS-managed master password |
+| Secrets sync | External Secrets Operator | Syncs the RDS master secret from AWS Secrets Manager into a K8s Secret |
+| App packaging | Helm chart (`gitops/task-manager`) | backend + frontend + configmap + secret/externalsecret + ingress |
 | Ingress | ingress-nginx | Routes external traffic to the frontend |
-| Monitoring | kube-prometheus-stack | Prometheus + Grafana + Alertmanager |
+| Monitoring | kube-prometheus-stack | Prometheus + Grafana + Alertmanager, on persistent volumes |
 
 ## Security
 
 - Jenkins: IAM instance profile scoped to ECR push only - no static AWS keys, no cluster access.
-- External Secrets Operator: IRSA, read-only to `app-secrets` only.
+- External Secrets Operator: IRSA, read-only, scoped to the RDS master secret's exact ARN.
+- RDS: private subnets, `publicly_accessible = false`, storage encrypted, port 5432 open only to the EKS nodes' security group. Master password generated and rotated by AWS - never in Terraform state.
 - Grafana + ArgoCD: ClusterIP only, reachable via `kubectl port-forward`.
 - Jenkins itself: authenticated (single admin account), not left open on the setup wizard's default of no login.
 - CI: Trivy scans both images for HIGH/CRITICAL CVEs and fails the build before anything reaches ECR - installed on the Jenkins EC2 pinned to a fixed, checksum-verified version, not a floating "latest" tag (Trivy's own release pipeline was compromised twice in 2026 via poisoned releases/tags).
 
 ## Cleanup Order
 
-1. Delete the ArgoCD Application (cascades, releases its Load Balancer + PVC)
+1. Delete the ArgoCD Application (cascades, releases everything it deployed)
 2. Uninstall ingress-nginx, wait for its Load Balancer to release
-3. `terraform destroy`
-4. `verify_cleanup()` checks AWS directly for anything left over
+3. Delete the monitoring PVCs - Prometheus/Alertmanager volumes come from StatefulSet templates, which neither `helm uninstall` nor `terraform destroy` removes, so their EBS volumes would outlive the cluster and keep billing
+4. `terraform destroy` (RDS included - no final snapshot, so nothing is left to pay for)
+5. `verify_cleanup()` checks AWS directly for anything left over
 
 See `destroy.sh` for the full script.
 
@@ -106,7 +113,7 @@ See `destroy.sh` for the full script.
 
 | Limitation | Mitigation |
 |---|---|
-| Postgres is a single pod, no HA | RDS is the natural next step |
+| RDS is single-AZ, no read replica | `multi_az = true` when uptime matters more than cost |
 | ECR repo names don't match `project_name` | Intentional - repos already hold image history |
 
 ## Jenkins Bootstrap

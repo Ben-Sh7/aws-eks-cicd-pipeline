@@ -14,9 +14,6 @@ const pool = new Pool({
     port: process.env.DB_PORT || 5432,
 });
 
-
-
-// הוספת משימה
 app.post('/api/tasks', async (req, res) => {
     try {
         const { title } = req.body;
@@ -27,7 +24,6 @@ app.post('/api/tasks', async (req, res) => {
     }
 });
 
-// קבלת כל המשימות
 app.get('/api/tasks', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM tasks ORDER BY id DESC');
@@ -37,7 +33,7 @@ app.get('/api/tasks', async (req, res) => {
     }
 });
 
-// --- Health Check for Kubernetes Probes ---
+// Probed by the liveness/readiness checks in the Helm chart.
 app.get('/health', async (req, res) => {
     try {
         await pool.query('SELECT 1');

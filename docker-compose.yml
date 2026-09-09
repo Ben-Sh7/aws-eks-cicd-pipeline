@@ -48,6 +48,5 @@ services:
       - backend
     restart: unless-stopped
 
-# הגדרת Volume לשמירת נתוני ה-DB גם כשהקונטיינר יורד
 volumes:
   pg_data:

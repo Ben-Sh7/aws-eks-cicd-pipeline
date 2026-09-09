@@ -1,4 +1,3 @@
-# Cluster add-ons: ingress controller, monitoring, GitOps CD, secrets sync.
 # The app itself is deployed by ArgoCD (see gitops/argocd-application.yaml), not here.
 
 resource "helm_release" "ingress_nginx" {
@@ -34,10 +33,9 @@ resource "helm_release" "kube_prometheus_stack" {
   timeout          = 600
 
   set_sensitive {
-    # Overrides the chart's known default password. No default in
-    # variables.tf, so this fails closed if unset.
+    # Overrides the chart's known default password (generated in admin-passwords.tf).
     name  = "grafana.adminPassword"
-    value = var.grafana_admin_password
+    value = random_password.grafana_admin.result
   }
 
   set {
@@ -46,7 +44,47 @@ resource "helm_release" "kube_prometheus_stack" {
     value = "ClusterIP"
   }
 
-  depends_on = [aws_eks_node_group.main]
+  # Without these both default to emptyDir - metrics history and any saved
+  # dashboards would be wiped on every pod restart.
+  set {
+    name  = "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName"
+    value = kubernetes_storage_class.gp3_tagged.metadata[0].name
+  }
+
+  set {
+    name  = "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.accessModes[0]"
+    value = "ReadWriteOnce"
+  }
+
+  set {
+    name  = "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage"
+    value = var.prometheus_storage_size
+  }
+
+  set {
+    name  = "prometheus.prometheusSpec.retention"
+    value = var.prometheus_retention
+  }
+
+  set {
+    name  = "grafana.persistence.enabled"
+    value = "true"
+  }
+
+  set {
+    name  = "grafana.persistence.storageClassName"
+    value = kubernetes_storage_class.gp3_tagged.metadata[0].name
+  }
+
+  set {
+    name  = "grafana.persistence.size"
+    value = var.grafana_storage_size
+  }
+
+  depends_on = [
+    aws_eks_node_group.main,
+    kubernetes_storage_class.gp3_tagged
+  ]
 }
 
 resource "helm_release" "argocd" {
@@ -77,7 +115,6 @@ resource "helm_release" "external_secrets" {
   timeout          = 600
 
   set {
-    # Binds the ServiceAccount to the IRSA role in irsa.tf.
     name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
     value = aws_iam_role.external_secrets.arn
   }

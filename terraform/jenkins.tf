@@ -1,6 +1,5 @@
-# Jenkins EC2 bootstrap: IAM instance profile (no static AWS keys) + the
-# rendered cloud-init script that installs Jenkins/Docker and configures
-# the admin user, GitHub credential, and Pipeline job on first boot.
+# Jenkins gets an instance profile rather than static AWS keys, scoped to
+# pushing the two ECR repos and nothing else.
 
 data "aws_iam_policy_document" "jenkins_assume_role" {
   statement {
@@ -61,6 +60,6 @@ locals {
     repo_url               = "https://github.com/${var.github_repo}.git"
     github_username        = var.github_username
     github_pat             = var.github_pat
-    jenkins_admin_password = var.jenkins_admin_password
+    jenkins_admin_password = random_password.jenkins_admin.result
   })
 }

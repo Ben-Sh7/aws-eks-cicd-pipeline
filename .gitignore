@@ -26,8 +26,8 @@ terraform/tfplan
 terraform/destroy.tfplan
 terraform/crash*.log
 
-# terraform.tfvars may hold the Grafana admin password or other sensitive
-# overrides - never commit; only the .tfvars.example template is tracked.
+# terraform.tfvars may hold the GitHub PAT or other sensitive overrides -
+# never commit; only the .tfvars.example template is tracked.
 terraform/*.tfvars
 terraform/*.tfvars.json
 !terraform/*.tfvars.example

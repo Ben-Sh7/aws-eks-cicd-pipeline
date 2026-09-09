@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>מערכת ניהול משימות</title>
+    <title>Task Manager</title>
     <style>
         * {
             margin: 0;
@@ -96,7 +96,7 @@
             border-radius: 10px;
             font-size: 16px;
             color: #333;
-            border-right: 4px solid #667eea;
+            border-left: 4px solid #667eea;
             transition: all 0.3s;
             display: flex;
             align-items: center;
@@ -112,7 +112,7 @@
 
         li:hover {
             background: linear-gradient(135deg, #eff0f7 0%, #e8ecf5 100%);
-            transform: translateX(-5px);
+            transform: translateX(5px);
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.2);
         }
 
@@ -144,12 +144,12 @@
 </head>
 <body>
     <div class="container">
-        <h1>📋 V3 ניהול משימות</h1>
-        <p class="subtitle">ארגן את המשימות שלך בקלות</p>
+        <h1>📋 Task Manager</h1>
+        <p class="subtitle">Organize your tasks with ease</p>
 
         <div class="input-group">
-            <input type="text" id="taskInput" placeholder="משימה חדשה...">
-            <button onclick="addTask()">הוסף משימה</button>
+            <input type="text" id="taskInput" placeholder="New task...">
+            <button onclick="addTask()">Add task</button>
         </div>
 
         <ul id="taskList"></ul>

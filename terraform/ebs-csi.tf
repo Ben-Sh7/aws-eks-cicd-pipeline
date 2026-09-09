@@ -1,5 +1,5 @@
 # EBS CSI driver - the in-tree provisioner was removed in Kubernetes 1.23+,
-# so the Postgres PVC needs this to provision at all.
+# so without this the Prometheus/Grafana PVCs can't provision at all.
 
 data "aws_iam_policy_document" "ebs_csi_assume_role" {
   statement {

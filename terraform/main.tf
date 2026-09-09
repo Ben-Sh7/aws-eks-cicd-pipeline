@@ -1,6 +1,3 @@
-# Infrastructure + cluster add-ons for devops-task-manager.
-#   terraform init / plan / apply / destroy
-
 terraform {
   required_providers {
     aws = {
@@ -18,6 +15,10 @@ terraform {
     tls = {
       source  = "hashicorp/tls"
       version = "~> 4.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
     }
   }
 }
@@ -47,9 +48,6 @@ provider "helm" {
   }
 }
 
-# ============================================
-# LOCAL VARIABLES & TAGS
-# ============================================
 locals {
   project_name = var.project_name
   environment  = var.environment
@@ -68,9 +66,6 @@ locals {
   }
 }
 
-# ============================================
-# VPC - Virtual Private Cloud
-# ============================================
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
@@ -82,9 +77,6 @@ resource "aws_vpc" "main" {
   )
 }
 
-# ============================================
-# INTERNET GATEWAY
-# ============================================
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
@@ -94,9 +86,6 @@ resource "aws_internet_gateway" "main" {
   )
 }
 
-# ============================================
-# PUBLIC SUBNETS
-# ============================================
 resource "aws_subnet" "public_1" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_1_cidr
@@ -121,9 +110,6 @@ resource "aws_subnet" "public_2" {
   )
 }
 
-# ============================================
-# ROUTE TABLE - Public
-# ============================================
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -148,11 +134,6 @@ resource "aws_route_table_association" "public_2" {
   route_table_id = aws_route_table.public.id
 }
 
-# ============================================
-# SECURITY GROUPS
-# ============================================
-
-# EKS Cluster Security Group
 resource "aws_security_group" "eks" {
   name_prefix = "${local.project_name}-eks-"
   description = "Security group for EKS cluster"
@@ -180,7 +161,6 @@ resource "aws_security_group" "eks" {
   )
 }
 
-# Jenkins Security Group
 resource "aws_security_group" "jenkins" {
   name_prefix = "${local.project_name}-jenkins-"
   description = "Security group for Jenkins EC2 instance"
@@ -216,9 +196,6 @@ resource "aws_security_group" "jenkins" {
   )
 }
 
-# ============================================
-# IAM ROLES - EKS
-# ============================================
 resource "aws_iam_role" "eks_cluster_role" {
   name_prefix = "${local.project_name}-eks-cluster-"
 
@@ -243,7 +220,6 @@ resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
   role       = aws_iam_role.eks_cluster_role.name
 }
 
-# EKS Node (Worker) Role
 resource "aws_iam_role" "eks_node_role" {
   name_prefix = "${local.project_name}-eks-node-"
 
@@ -278,9 +254,6 @@ resource "aws_iam_role_policy_attachment" "eks_registry_policy" {
   role       = aws_iam_role.eks_node_role.name
 }
 
-# ============================================
-# EKS CLUSTER
-# ============================================
 resource "aws_eks_cluster" "main" {
   name     = local.project_name
   role_arn = aws_iam_role.eks_cluster_role.arn
@@ -301,13 +274,20 @@ resource "aws_eks_cluster" "main" {
   )
 }
 
-# ============================================
-# EKS NODE GROUP
-# ============================================
-# Node group tags propagate to its EC2 instances automatically, but not to
-# their EBS volumes - this exists just to tag those too.
+# A node group's own `tags` only tag the EKS node group object - they do NOT
+# reach the EC2 instances or their volumes. A launch template with
+# tag_specifications is the only way to tag those, and verify_cleanup in
+# destroy.sh looks for orphans by the Project tag, so this is required.
 resource "aws_launch_template" "eks_nodes" {
   name_prefix = "${local.project_name}-nodes-"
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = merge(
+      local.common_tags,
+      { Name = "${local.project_name}-node" }
+    )
+  }
 
   tag_specifications {
     resource_type = "volume"
@@ -356,9 +336,6 @@ resource "aws_eks_node_group" "main" {
   ]
 }
 
-# ============================================
-# EC2 - JENKINS INSTANCE
-# ============================================
 resource "aws_instance" "jenkins" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.jenkins_instance_type
@@ -378,8 +355,6 @@ resource "aws_instance" "jenkins" {
     )
   }
 
-  # Installs Jenkins/Docker and bootstraps the admin user, GitHub
-  # credential, and Pipeline job on first boot - see jenkins.tf.
   user_data = templatefile("${path.module}/templates/jenkins-user-data.sh.tftpl", {
     groovy_script = local.jenkins_groovy_script
   })
@@ -390,7 +365,6 @@ resource "aws_instance" "jenkins" {
   )
 }
 
-# Get latest Ubuntu 22.04 AMI
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["099720109477"] # Canonical
@@ -406,9 +380,6 @@ data "aws_ami" "ubuntu" {
   }
 }
 
-# ============================================
-# ECR REPOSITORIES
-# ============================================
 resource "aws_ecr_repository" "backend" {
   name                 = local.ecr_backend_repo_name
   image_tag_mutability = "MUTABLE"
@@ -438,7 +409,6 @@ resource "aws_ecr_repository" "frontend" {
   )
 }
 
-# Lifecycle policy to avoid storage costs
 resource "aws_ecr_lifecycle_policy" "backend" {
   repository = aws_ecr_repository.backend.name
 

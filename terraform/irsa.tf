@@ -52,8 +52,7 @@ resource "aws_iam_role" "external_secrets" {
   tags               = local.common_tags
 }
 
-# Least privilege: read-only access to exactly the one secret this project
-# uses, not SecretsManagerReadWrite / not a wildcard over all secrets.
+# Scoped to this one secret's ARN - not SecretsManagerReadWrite, not a wildcard.
 data "aws_iam_policy_document" "eso_secrets_access" {
   statement {
     effect = "Allow"
@@ -61,9 +60,7 @@ data "aws_iam_policy_document" "eso_secrets_access" {
       "secretsmanager:GetSecretValue",
       "secretsmanager:DescribeSecret",
     ]
-    resources = [
-      "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:app-secrets*"
-    ]
+    resources = [aws_db_instance.postgres.master_user_secret[0].secret_arn]
   }
 }
 

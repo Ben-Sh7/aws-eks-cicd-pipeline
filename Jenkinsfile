@@ -1,7 +1,8 @@
-// CI only: build, push to ECR, bump the image tag in values-images.yaml and
-// push it back. ArgoCD (see gitops/argocd-application.yaml) watches this repo and
-// deploys the app. The guard stage below skips the pipeline when the last
-// commit was made by this same pipeline (jenkins-ci-bot), to avoid a loop.
+// CI only: build, scan with Trivy, push to ECR, bump the image tag in
+// values-images.yaml and push it back. ArgoCD (see
+// gitops/argocd-application.yaml) watches this repo and deploys the app.
+// The guard stage below skips the pipeline when the last commit was made
+// by this same pipeline (jenkins-ci-bot), to avoid a loop.
 
 pipeline {
     agent any

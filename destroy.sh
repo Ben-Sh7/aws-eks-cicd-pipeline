@@ -1,6 +1,6 @@
 #!/bin/bash
-# Tears down everything: ArgoCD app -> ingress-nginx LB -> terraform destroy
-# -> app-secrets -> verify_cleanup. Order matters: each step releases
+# Tears down everything: ArgoCD app -> ingress-nginx LB -> monitoring PVCs
+# -> terraform destroy -> verify_cleanup. Order matters: each step releases
 # resources the next step's deletion depends on being gone.
 
 set -e
@@ -11,21 +11,19 @@ ARGOCD_APP="$PROJECT_DIR/gitops/argocd-application.yaml"
 AWS_REGION="us-east-1"
 
 # Load secrets from .env if present (gitignored - see .env.example for what's needed).
-# terraform destroy needs these too: the three TF_VAR_* have no defaults.
+# terraform destroy needs it too: github_pat has no default.
 if [ -f "$PROJECT_DIR/.env" ]; then
     set -a
     source "$PROJECT_DIR/.env"
     set +a
 fi
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Functions
 print_header() {
     echo -e "\n${RED}╔════════════════════════════════════════════╗${NC}"
     echo -e "${RED}║ $1${NC}"
@@ -48,7 +46,6 @@ print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
 
-# Confirmation
 confirm_destruction() {
     print_header "⚠️  DESTRUCTIVE ACTION - CONFIRMATION REQUIRED"
 
@@ -64,10 +61,10 @@ confirm_destruction() {
     echo "  - ECR Repositories (backend, frontend) - including their images"
     echo "  - VPC and all networking"
     echo "  - ingress-nginx + kube-prometheus-stack (Prometheus/Grafana) + argocd + external-secrets"
-    echo "  - The task-manager application (ArgoCD-managed), including its PVC/EBS volume"
-    echo -e "  - ${RED}The app-secrets AWS Secrets Manager secret - PERMANENTLY, with no 30-day recovery window${NC}"
-    echo "    (created manually, outside Terraform - if you'd rather keep it across a future"
-    echo "     create.sh, answer 'no' below when asked, then rerun this script)"
+    echo "  - The task-manager application (ArgoCD-managed)"
+    echo -e "  - ${RED}The RDS Postgres instance and ALL its data - no final snapshot is taken${NC}"
+    echo "    (its master secret is AWS-managed and is deleted along with the instance)"
+    echo "  - Prometheus/Grafana persistent volumes (metrics history and saved dashboards)"
     echo ""
     echo -e "${RED}Type 'YES' to confirm deletion:${NC}"
     read -p "Confirmation: " confirmation
@@ -76,37 +73,44 @@ confirm_destruction() {
         print_error "Deletion cancelled"
         exit 0
     fi
-
-    echo ""
-    echo -e "${YELLOW}Also permanently delete the app-secrets AWS Secrets Manager secret? (y/N)${NC}"
-    echo "This is the one piece of this project that isn't Terraform-managed and won't be"
-    echo "touched otherwise - it will keep costing a small amount monthly if you skip this."
-    read -p "Delete app-secrets too? [y/N]: " delete_secret_answer
-    if [[ "$delete_secret_answer" =~ ^[Yy]$ ]]; then
-        DELETE_SECRET=true
-    else
-        DELETE_SECRET=false
-        print_warning "Keeping app-secrets - it will still exist (and bill) after this script finishes."
-    fi
 }
 
-# app-secrets is created manually, outside Terraform - nothing else touches
-# it. --force-delete-without-recovery skips the normal 7-30 day recovery
-# window (which would otherwise keep billing).
-delete_app_secret() {
-    if [ "$DELETE_SECRET" != true ]; then
+# Prometheus/Alertmanager PVCs come from StatefulSet volumeClaimTemplates,
+# which neither `helm uninstall` nor terraform destroy removes - their EBS
+# volumes would survive the cluster and keep billing. Must run while the
+# cluster still exists.
+delete_monitoring_pvcs() {
+    print_header "DELETING MONITORING PERSISTENT VOLUMES"
+
+    if [ "$CLUSTER_GONE" = true ]; then
+        print_warning "Cluster already gone - skipping (check for stray EBS volumes in verify_cleanup below)."
         return 0
     fi
 
-    print_header "DELETING app-secrets (AWS Secrets Manager)"
-
-    if aws secretsmanager describe-secret --secret-id app-secrets --region "$AWS_REGION" &> /dev/null; then
-        aws secretsmanager delete-secret --secret-id app-secrets --region "$AWS_REGION" \
-            --force-delete-without-recovery > /dev/null
-        print_success "app-secrets permanently deleted (no recovery window)"
-    else
-        print_warning "app-secrets not found - already deleted, or never created"
+    if ! kubectl get namespace monitoring &> /dev/null; then
+        print_warning "No monitoring namespace - nothing to delete"
+        return 0
     fi
+
+    local pvcs
+    pvcs=$(kubectl get pvc -n monitoring -o name 2>/dev/null | wc -l)
+    if [ "$pvcs" -eq 0 ]; then
+        print_success "No PVCs in monitoring namespace"
+        return 0
+    fi
+
+    print_step "Deleting $pvcs PVC(s) in the monitoring namespace..."
+    kubectl delete pvc --all -n monitoring --timeout=120s || true
+
+    print_step "Waiting for the backing EBS volumes to be released..."
+    for i in $(seq 1 24); do
+        if [ "$(kubectl get pvc -n monitoring -o name 2>/dev/null | wc -l)" -eq 0 ]; then
+            print_success "Monitoring PVCs deleted - their EBS volumes were released"
+            return 0
+        fi
+        sleep 5
+    done
+    print_warning "Some monitoring PVCs are still present - verify_cleanup will check for leftover EBS volumes."
 }
 
 configure_kubectl() {
@@ -138,18 +142,6 @@ delete_app_release() {
         print_step "Deleting the task-manager ArgoCD Application (cascading)..."
         kubectl delete -f "$ARGOCD_APP" --wait=true --timeout=120s
         print_success "Application object deleted"
-
-        print_step "Waiting for the Postgres PVC (and its EBS volume) to actually disappear..."
-        for i in $(seq 1 24); do
-            if ! kubectl get pvc postgres-pvc &> /dev/null; then
-                print_success "PVC confirmed gone"
-                break
-            fi
-            sleep 5
-        done
-        if kubectl get pvc postgres-pvc &> /dev/null; then
-            print_warning "postgres-pvc is still present after 2 minutes - its EBS volume may not release cleanly. Check manually: kubectl get pvc,pv"
-        fi
     else
         print_warning "No task-manager ArgoCD Application found - skipping (already removed, or never registered?)"
     fi
@@ -215,7 +207,6 @@ delete_infrastructure() {
     cd "$PROJECT_DIR"
 }
 
-# Verify cleanup
 verify_cleanup() {
     print_header "VERIFYING CLEANUP - CHECKING FOR ORPHANED RESOURCES"
 
@@ -272,17 +263,19 @@ verify_cleanup() {
         fi
     fi
 
-    print_step "Checking for a leftover EBS volume from the Postgres PVC..."
+    # Covers every dynamically-provisioned volume (Prometheus, Grafana) -
+    # the gp3-tagged StorageClass stamps them all with Project=task-manager.
+    print_step "Checking for leftover EBS volumes..."
     local orphan_volumes=$(aws ec2 describe-volumes \
-        --filters "Name=status,Values=available" "Name=tag:kubernetes.io/created-for/pvc/name,Values=postgres-pvc" \
+        --filters "Name=status,Values=available" "Name=tag:Project,Values=task-manager" \
         --query 'length(Volumes)' \
         --region "$AWS_REGION" 2>/dev/null || echo 0)
 
     if [ "$orphan_volumes" -gt 0 ]; then
-        print_error "Found $orphan_volumes unattached EBS volume(s) from postgres-pvc - these are billed hourly even unattached. Inspect: aws ec2 describe-volumes --filters Name=tag:kubernetes.io/created-for/pvc/name,Values=postgres-pvc"
+        print_error "Found $orphan_volumes unattached EBS volume(s) - these are billed hourly even unattached. Inspect: aws ec2 describe-volumes --filters Name=status,Values=available Name=tag:Project,Values=task-manager"
         orphans_found=$((orphans_found + 1))
     else
-        print_success "No leftover PVC volumes (✓)"
+        print_success "No leftover EBS volumes (✓)"
     fi
 
     print_step "Checking ECR repositories..."
@@ -298,16 +291,27 @@ verify_cleanup() {
         print_success "No ECR repositories (✓)"
     fi
 
-    print_step "Checking app-secrets (AWS Secrets Manager)..."
-    if [ "$DELETE_SECRET" = true ]; then
-        if aws secretsmanager describe-secret --secret-id app-secrets --region "$AWS_REGION" &> /dev/null; then
-            print_error "app-secrets still exists (you chose to delete it - deletion may have failed)"
-            orphans_found=$((orphans_found + 1))
-        else
-            print_success "app-secrets deleted (✓)"
-        fi
+    print_step "Checking RDS instances..."
+    if aws rds describe-db-instances --db-instance-identifier task-manager-postgres --region "$AWS_REGION" &> /dev/null; then
+        print_error "RDS instance 'task-manager-postgres' still exists - this is the most expensive resource here"
+        orphans_found=$((orphans_found + 1))
     else
-        print_warning "app-secrets was kept by your choice - it's still there and still billing a small amount"
+        print_success "No RDS instance (✓)"
+    fi
+
+    # skip_final_snapshot is set, so there should be none - but a snapshot
+    # outlives its instance and keeps billing for storage.
+    print_step "Checking RDS snapshots..."
+    local rds_snapshots=$(aws rds describe-db-snapshots \
+        --db-instance-identifier task-manager-postgres \
+        --query 'length(DBSnapshots)' \
+        --region "$AWS_REGION" 2>/dev/null || echo 0)
+
+    if [ "$rds_snapshots" -gt 0 ]; then
+        print_error "Found $rds_snapshots RDS snapshot(s) - these bill for storage. Inspect: aws rds describe-db-snapshots --db-instance-identifier task-manager-postgres"
+        orphans_found=$((orphans_found + 1))
+    else
+        print_success "No RDS snapshots (✓)"
     fi
 
     print_step "Checking NAT Gateways..."
@@ -349,6 +353,20 @@ verify_cleanup() {
         print_success "No Load Balancers (✓)"
     fi
 
+    # Secrets bill while pending deletion. Ours use recovery_window_in_days = 0,
+    # and AWS deletes the RDS-managed secret along with the DB instance.
+    print_step "Checking Secrets Manager secrets..."
+    local secrets_left=$(aws secretsmanager list-secrets \
+        --query "length(SecretList[?starts_with(Name, 'task-manager/')])" \
+        --region "$AWS_REGION" 2>/dev/null || echo 0)
+
+    if [ "$secrets_left" -gt 0 ]; then
+        print_error "Found $secrets_left project secret(s) still present - they bill even while pending deletion. Inspect: aws secretsmanager list-secrets --query \"SecretList[?starts_with(Name, 'task-manager/')].Name\""
+        orphans_found=$((orphans_found + 1))
+    else
+        print_success "No project secrets (✓)"
+    fi
+
     echo ""
     if [ $orphans_found -eq 0 ]; then
         print_success "✓ CLEANUP VERIFIED - NO ORPHANED RESOURCES!"
@@ -360,7 +378,6 @@ verify_cleanup() {
     fi
 }
 
-# Show cost summary
 show_cost_summary() {
     print_header "💰 COST SUMMARY"
 
@@ -374,7 +391,6 @@ show_cost_summary() {
     echo "  ✓ No surprise bills"
 }
 
-# Main execution
 main() {
     echo -e "${RED}"
     echo "╔═══════════════════════════════════════════════════════════╗"
@@ -384,14 +400,13 @@ main() {
 
     CLUSTER_GONE=false
     VPC_ID=""
-    DELETE_SECRET=false
 
     confirm_destruction
     configure_kubectl
     delete_app_release
     delete_ingress_nginx_early
+    delete_monitoring_pvcs
     delete_infrastructure
-    delete_app_secret
     verify_cleanup
     show_cost_summary
 
@@ -400,5 +415,4 @@ main() {
     echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}\n"
 }
 
-# Run main function
 main
