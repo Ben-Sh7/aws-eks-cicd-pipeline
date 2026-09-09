@@ -31,3 +31,6 @@ terraform/crash*.log
 terraform/*.tfvars
 terraform/*.tfvars.json
 !terraform/*.tfvars.example
+
+# Local working notes - handover prompts, scratch plans. Not part of the project.
+docs/
