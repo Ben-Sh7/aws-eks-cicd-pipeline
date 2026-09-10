@@ -90,7 +90,7 @@ ArgoCD compares *state*, not files: it renders the chart under `path: gitops/tas
 | Secrets sync | External Secrets Operator | Syncs the RDS master secret from AWS Secrets Manager into a K8s Secret |
 | App packaging | Helm chart (`gitops/task-manager`) | backend + frontend + configmap + secret/externalsecret + ingress |
 | Ingress | ingress-nginx | Routes external traffic to the frontend |
-| Monitoring | kube-prometheus-stack | Prometheus + Grafana + Alertmanager, on persistent volumes |
+| Monitoring | kube-prometheus-stack | Prometheus (15d retention) and Grafana on persistent volumes; Alertmanager runs with the chart defaults - on emptyDir, and routing to a null receiver |
 
 ## Security
 
@@ -109,7 +109,7 @@ ArgoCD compares *state*, not files: it renders the chart under `path: gitops/tas
 
 1. Delete the ArgoCD Application (cascades, releases everything it deployed)
 2. Uninstall ingress-nginx, wait for its Load Balancer to release
-3. Delete the monitoring PVCs - Prometheus/Alertmanager volumes come from StatefulSet templates, which neither `helm uninstall` nor `terraform destroy` removes, so their EBS volumes would outlive the cluster and keep billing
+3. Delete the monitoring PVCs - the Prometheus volume comes from a StatefulSet template and the Grafana one from the chart's persistence block, and neither `helm uninstall` nor `terraform destroy` removes them, so their EBS volumes would outlive the cluster and keep billing. Alertmanager has no PVC: its storage is left at the chart default, which is emptyDir
 4. `terraform destroy` (RDS included - no final snapshot, so nothing is left to pay for)
 5. Delete the two GitHub webhooks. The Jenkins EC2's public IP goes back to AWS's pool and is reassigned to another customer, so a webhook left behind would keep posting this repo's push payloads - commit messages, author names and emails - to a stranger's server
 6. `verify_cleanup()` checks AWS directly for anything left over
@@ -123,6 +123,7 @@ See `destroy.sh` for the full script.
 | RDS is single-AZ, no read replica | `multi_az = true` when uptime matters more than cost |
 | ECR repo names don't match `project_name` | Intentional - repos already hold image history |
 | The four add-on Helm releases install one after another, not in parallel | Required: the Helm provider shares one repository cache across concurrent `helm_release` resources and all but one fail with "no cached repo found". Costs a few minutes per run |
+| Alertmanager is deployed but has no receiver | The chart's default route points at a null receiver, so alerts are visible in its UI and go nowhere else. Wiring Slack or email is a values change, not an architectural one |
 | Worker nodes sit in public subnets with public IPs | Their security group admits only the cluster's own SG and the ingress load balancer's SG - nothing from the internet. Private subnets would need a NAT gateway (~$32/month) for image pulls |
 
 ## Jenkins Bootstrap

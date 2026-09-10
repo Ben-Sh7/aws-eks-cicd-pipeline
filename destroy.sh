@@ -76,7 +76,9 @@ confirm_destruction() {
     fi
 }
 
-# Prometheus/Alertmanager PVCs come from StatefulSet volumeClaimTemplates,
+# The Prometheus PVC comes from a StatefulSet volumeClaimTemplate and the
+# Grafana one from the chart's persistence block (Alertmanager has none - it is
+# left on the chart default, emptyDir),
 # which neither `helm uninstall` nor terraform destroy removes - their EBS
 # volumes would survive the cluster and keep billing. Must run while the
 # cluster still exists.
@@ -225,7 +227,9 @@ delete_orphaned_volumes() {
     print_header "SWEEPING UP ORPHANED EBS VOLUMES"
 
     local vols
-    vols=$(aws ec2 describe-volumes         --filters "Name=status,Values=available" "Name=tag:Project,Values=${PROJECT_TAG}"         --query 'Volumes[].VolumeId' --output text 2>/dev/null | tr -d '' || true)
+    vols=$(aws ec2 describe-volumes \
+        --filters "Name=status,Values=available" "Name=tag:Project,Values=${PROJECT_TAG}" \
+        --query 'Volumes[].VolumeId' --output text 2>/dev/null | tr -d '\015' || true)
 
     if [ -z "$vols" ] || [ "$vols" = "None" ]; then
         print_success "No orphaned EBS volumes"

@@ -1,0 +1,10 @@
+# Normalise all text to LF in the repo. core.autocrlf=true on this machine was
+# rewriting the shell scripts to CRLF on every checkout, which put stray
+# carriage returns into the source and made the jq/curl bugs harder to see.
+* text=auto eol=lf
+
+# These must be LF regardless of platform - they are executed, not just read.
+*.sh            text eol=lf
+*.tftpl         text eol=lf
+*.groovy        text eol=lf
+Jenkinsfile     text eol=lf
