@@ -141,6 +141,34 @@ resource "helm_release" "kube_prometheus_stack" {
     value = var.grafana_storage_size
   }
 
+  # kube-prometheus-stack assumes a self-managed control plane, where the
+  # scheduler, controller-manager and etcd run as scrapeable pods. On EKS they
+  # run on AWS's side and are not exposed at all, so Prometheus looks for them,
+  # finds nothing, and fires KubeSchedulerDown / KubeControllerManagerDown /
+  # etcd alerts at severity critical - on every single run, forever, with
+  # nothing anyone can do about them.
+  #
+  # An alert that is always firing is worse than no alert: it teaches you to
+  # ignore the channel. Disabling these drops their ServiceMonitors and their
+  # rules. It costs no real visibility, because there was none to lose - EKS
+  # control-plane metrics come from CloudWatch or enabled_cluster_log_types,
+  # not from scraping. kube-proxy is left enabled: it does run here, as a
+  # DaemonSet on the nodes.
+  set {
+    name  = "kubeScheduler.enabled"
+    value = "false"
+  }
+
+  set {
+    name  = "kubeControllerManager.enabled"
+    value = "false"
+  }
+
+  set {
+    name  = "kubeEtcd.enabled"
+    value = "false"
+  }
+
   # Serialised behind ingress-nginx on purpose. The helm provider shares one
   # repository cache and config file across parallel helm_release resources, so
   # creating them concurrently makes all but one fail with "no cached repo
