@@ -13,8 +13,9 @@ Create `.env` in the project root with:
 AWS_PROFILE=<your AWS profile>         # omit only if your creds are on [default]
 TF_VAR_github_pat=<your GitHub PAT>    # repo + admin:repo_hook scopes
 POSTGRES_PASSWORD=<your password>      # local docker-compose only
+# TF_VAR_slack_webhook_url=<url>       # optional - Alertmanager -> Slack
 ```
-Those three are all you supply. Everything else is generated for you: Terraform creates Grafana's and Jenkins' admin passwords and the two shared secrets GitHub signs its webhooks with - one for Jenkins, one for ArgoCD - straight into AWS Secrets Manager, and AWS itself generates and rotates the database password. You never choose or handle any of them; `terraform output` names the Secrets Manager entry for each.
+Those three are all you supply (Slack is optional - see below). Everything else is generated for you: Terraform creates Grafana's and Jenkins' admin passwords and the two shared secrets GitHub signs its webhooks with - one for Jenkins, one for ArgoCD - straight into AWS Secrets Manager, and AWS itself generates and rotates the database password. You never choose or handle any of them; `terraform output` names the Secrets Manager entry for each.
 
 `create.sh` also detects the public IP it is running from and opens the Jenkins UI to that address only. Port 8080 is otherwise reachable only from GitHub's published webhook ranges, and there is no SSH rule at all - the instance is reached through SSM Session Manager. If your IP changes, re-run `create.sh`, or set `TF_VAR_jenkins_ui_allowed_cidrs='["x.x.x.x/32"]'` yourself.
 
@@ -71,7 +72,7 @@ that the token is valid, not that its permissions are sufficient.
 2. **Jenkins (CI)** builds the Docker image, pushes it to ECR, bumps the image tag in `gitops/task-manager/values-images.yaml`, and pushes that back to the repo
 3. **ArgoCD (CD)** is notified by a webhook, pulls the change, and deploys the app to EKS - Jenkins never touches the cluster. Only ArgoCD's `/api/webhook` path is published through the ingress; its UI and API stay internal, and payloads must be signed with a secret Terraform generates. If the webhook is ever unavailable, ArgoCD's own 180-second poll still picks the change up
 4. **External Secrets Operator** pulls DB credentials from AWS Secrets Manager straight into the cluster - no secret ever passes through git or Jenkins
-5. **Prometheus + Grafana** watch the cluster the whole time
+5. **Prometheus + Grafana** watch the cluster the whole time. Alertmanager comes with them; set `TF_VAR_slack_webhook_url` and it posts `warning`/`critical` alerts to Slack (`Watchdog` and `InfoInhibitor` are filtered out). Left unset, alerts still show in Alertmanager's own UI
 
 Jenkins itself is fully self-configuring: `terraform apply` provisions the EC2 with a `user_data` script that installs Jenkins/Docker, and a Groovy init script that creates the admin login, the GitHub credential, and the Pipeline job automatically on first boot - no manual clicking through the Jenkins UI.
 
@@ -82,13 +83,13 @@ See [HLD.md](HLD.md) for the full design document.
 ## Tech Stack
 
 - **App**: React, Node.js/Express, PostgreSQL
-- **Infrastructure as Code**: Terraform (VPC, EKS, EC2, ECR, IAM, OIDC)
+- **Infrastructure as Code**: Terraform (VPC with private subnets + NAT gateway, EKS, EC2, ECR, IAM, OIDC)
 - **Packaging**: Helm
 - **CI**: Jenkins (build + push only), with Trivy scanning every image for CVEs before push
 - **CD**: ArgoCD (GitOps, pull-based, webhook-triggered)
 - **Secrets**: External Secrets Operator + IRSA ← AWS Secrets Manager
 - **Ingress**: ingress-nginx
-- **Monitoring**: Prometheus + Grafana (kube-prometheus-stack)
+- **Monitoring**: Prometheus + Grafana + Alertmanager (kube-prometheus-stack), optional Slack alerting
 
 ## Database
 

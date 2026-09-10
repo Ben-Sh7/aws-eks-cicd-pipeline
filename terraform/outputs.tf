@@ -88,3 +88,13 @@ output "jenkins_webhook_secret_name" {
   description = "Secrets Manager entry holding the shared secret GitHub signs Jenkins webhook payloads with. create.sh reads it to register the hook; the value is never printed."
   value       = aws_secretsmanager_secret.jenkins_webhook.name
 }
+
+output "nat_gateway_public_ip" {
+  description = "The single public IP all worker-node egress leaves from now that the nodes are in private subnets. This is the address to allowlist if the cluster calls a third-party API that filters by source IP."
+  value       = aws_eip.nat.public_ip
+}
+
+output "slack_alerting" {
+  description = "Whether Alertmanager routes to Slack. 'disabled' means it is on the chart default (null receiver); set TF_VAR_slack_webhook_url in .env to enable."
+  value       = local.slack_alerting_enabled ? "enabled (channel ${var.slack_channel})" : "disabled - set TF_VAR_slack_webhook_url"
+}

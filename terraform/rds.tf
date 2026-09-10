@@ -8,6 +8,7 @@ resource "aws_subnet" "private_1" {
 
   tags = merge(
     local.common_tags,
+    local.private_subnet_lb_tags,
     { Name = "${local.project_name}-private-1" }
   )
 }
@@ -19,12 +20,14 @@ resource "aws_subnet" "private_2" {
 
   tags = merge(
     local.common_tags,
+    local.private_subnet_lb_tags,
     { Name = "${local.project_name}-private-2" }
   )
 }
 
-# No internet route - RDS needs no outbound access, so no NAT gateway
-# (which would add real cost).
+# The 0.0.0.0/0 route through the NAT gateway is added in nat.tf: the EKS nodes
+# now live in these subnets and need egress for image pulls. RDS itself still
+# needs no outbound access.
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 

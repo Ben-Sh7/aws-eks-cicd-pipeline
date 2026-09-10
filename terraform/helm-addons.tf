@@ -1,5 +1,60 @@
 # The app itself is deployed by ArgoCD (see gitops/argocd-application.yaml), not here.
 
+locals {
+  # Alertmanager ships with kube-prometheus-stack and is deployed either way.
+  # Left at the chart default it routes everything to a null receiver, so alerts
+  # only ever reach its own UI. Setting slack_webhook_url turns on the routing
+  # below; leaving it empty keeps the one-command, no-Slack-account promise.
+  # nonsensitive: whether Slack is configured is not itself a secret, and this
+  # boolean needs to be usable in an output and a plain conditional.
+  slack_alerting_enabled = nonsensitive(var.slack_webhook_url != "")
+
+  alertmanager_values = {
+    alertmanager = {
+      config = {
+        global = { resolve_timeout = "5m" }
+
+        route = {
+          receiver        = "slack"
+          group_by        = ["namespace", "alertname"]
+          group_wait      = "30s"
+          group_interval  = "5m"
+          repeat_interval = "4h"
+          routes = [
+            # Watchdog fires forever by design (a dead-man's switch you alert on
+            # its ABSENCE), and InfoInhibitor is internal plumbing. Neither is a
+            # real alert - drop both before they reach Slack.
+            {
+              receiver = "null"
+              matchers = ["alertname =~ \"Watchdog|InfoInhibitor\""]
+            },
+            {
+              receiver = "slack"
+              matchers = ["severity =~ \"warning|critical\""]
+            },
+          ]
+        }
+
+        receivers = [
+          { name = "null" },
+          {
+            name = "slack"
+            slack_configs = [
+              {
+                api_url       = var.slack_webhook_url
+                channel       = var.slack_channel
+                send_resolved = true
+                title         = "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .Alerts | len }})"
+                text          = "{{ range .Alerts }}{{ .Labels.severity }}: {{ .Annotations.summary }} — {{ .Annotations.description }}\n{{ end }}"
+              },
+            ]
+          },
+        ]
+      }
+    }
+  }
+}
+
 resource "helm_release" "ingress_nginx" {
   name             = "ingress-nginx"
   repository       = "https://kubernetes.github.io/ingress-nginx"
@@ -31,6 +86,11 @@ resource "helm_release" "kube_prometheus_stack" {
   namespace        = "monitoring"
   create_namespace = true
   timeout          = 600
+
+  # Alertmanager routing. Empty list when slack_webhook_url is unset, so the
+  # chart default (null receiver) stands. The list is derived from a sensitive
+  # variable, so plan shows it as "(sensitive value)".
+  values = local.slack_alerting_enabled ? [yamlencode(local.alertmanager_values)] : []
 
   set_sensitive {
     # Overrides the chart's known default password (generated in admin-passwords.tf).

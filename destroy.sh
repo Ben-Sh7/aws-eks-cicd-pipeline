@@ -60,7 +60,7 @@ confirm_destruction() {
     echo "  - EKS Cluster (task-manager)"
     echo "  - EC2 Instances (Jenkins)"
     echo "  - ECR Repositories (backend, frontend) - including their images"
-    echo "  - VPC and all networking"
+    echo "  - VPC and all networking, including the NAT gateway and its Elastic IP"
     echo "  - ingress-nginx + kube-prometheus-stack (Prometheus/Grafana) + argocd + external-secrets"
     echo "  - The task-manager application (ArgoCD-managed)"
     echo -e "  - ${RED}The RDS Postgres instance and ALL its data - no final snapshot is taken${NC}"
@@ -76,12 +76,11 @@ confirm_destruction() {
     fi
 }
 
-# The Prometheus PVC comes from a StatefulSet volumeClaimTemplate and the
-# Grafana one from the chart's persistence block (Alertmanager has none - it is
-# left on the chart default, emptyDir),
-# which neither `helm uninstall` nor terraform destroy removes - their EBS
-# volumes would survive the cluster and keep billing. Must run while the
-# cluster still exists.
+# The Prometheus PVC comes from a StatefulSet volumeClaimTemplate and the Grafana
+# one from the chart's persistence block. Neither `helm uninstall` nor terraform
+# destroy removes them, so their EBS volumes would survive the cluster and keep
+# billing - this must run while the cluster still exists. (Alertmanager has no
+# PVC; its storage is left at the chart default, emptyDir.)
 delete_monitoring_pvcs() {
     print_header "DELETING MONITORING PERSISTENT VOLUMES"
 
@@ -400,28 +399,41 @@ verify_cleanup() {
         print_success "No RDS snapshots (✓)"
     fi
 
+    # A NAT gateway bills ~$0.045/hr until its state reaches "deleted". "deleted"
+    # and "failed" ones are free and linger in the API for ~1h, so exclude them.
     print_step "Checking NAT Gateways..."
     local nat_gateways=$(aws ec2 describe-nat-gateways \
-        --filter "Name=tag:Project,Values=task-manager" \
+        --filter "Name=tag:Project,Values=task-manager" "Name=state,Values=pending,available,deleting" \
         --query 'length(NatGateways)' \
         --region "$AWS_REGION" 2>/dev/null || echo 0)
 
     if [ "$nat_gateways" -gt 0 ]; then
-        print_error "Found $nat_gateways NAT Gateways (should be 0)"
+        print_error "Found $nat_gateways live NAT Gateway(s) - billed hourly. Inspect: aws ec2 describe-nat-gateways --filter Name=tag:Project,Values=task-manager"
         orphans_found=$((orphans_found + 1))
     else
-        print_success "No NAT Gateways (✓)"
+        print_success "No live NAT Gateways (✓)"
     fi
 
-    print_step "Checking Elastic IPs..."
-    local eips=$(aws ec2 describe-addresses \
+    # The NAT gateway's Elastic IP. If terraform removed the NAT gateway but the
+    # EIP release failed, it sits unassociated and bills ~$0.005/hr while held.
+    print_step "Checking this project's Elastic IPs..."
+    local project_eips=$(aws ec2 describe-addresses \
+        --filters "Name=tag:Project,Values=task-manager" \
         --query 'length(Addresses[?AssociationId==null])' \
         --region "$AWS_REGION" 2>/dev/null || echo 0)
 
-    if [ "$eips" -gt 0 ]; then
-        print_warning "Found $eips unassociated Elastic IPs (may be from other projects)"
+    if [ "$project_eips" -gt 0 ]; then
+        print_error "Found $project_eips unassociated task-manager Elastic IP(s) - billed hourly. Release: aws ec2 release-address --allocation-id <id> (list: aws ec2 describe-addresses --filters Name=tag:Project,Values=task-manager)"
+        orphans_found=$((orphans_found + 1))
     else
-        print_success "No unassociated Elastic IPs (✓)"
+        print_success "No orphaned project Elastic IPs (✓)"
+    fi
+
+    local other_eips=$(aws ec2 describe-addresses \
+        --query 'length(Addresses[?AssociationId==null])' \
+        --region "$AWS_REGION" 2>/dev/null || echo 0)
+    if [ "$other_eips" -gt 0 ]; then
+        print_warning "$other_eips unassociated Elastic IP(s) exist account-wide (may be other projects - not touched)"
     fi
 
     print_step "Checking Elastic/Classic Load Balancers..."
@@ -468,8 +480,8 @@ show_cost_summary() {
     print_header "💰 COST SUMMARY"
 
     echo -e "${BLUE}Before deletion:${NC}"
-    echo "  If running 24/7 for a month: ~\$139+"
-    echo "  If running for a few hours: ~\$1-5"
+    echo "  If running 24/7 for a month: ~\$170+ (incl. ~\$32 NAT gateway)"
+    echo "  If running for a few hours: ~\$3-6"
     echo ""
     echo -e "${GREEN}After deletion:${NC}"
     echo "  ✓ All resources removed"

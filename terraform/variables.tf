@@ -178,6 +178,19 @@ variable "jenkins_ui_allowed_cidrs" {
   default     = []
 }
 
+variable "slack_webhook_url" {
+  description = "Slack Incoming Webhook URL for Alertmanager. Empty (the default) leaves Alertmanager on the chart default - a null receiver - so the project still comes up with one command and no Slack account. Set it in .env as TF_VAR_slack_webhook_url to route alerts to Slack. It lives only in .env (gitignored) and local state."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "slack_channel" {
+  description = "Channel Alertmanager posts to. Only used when slack_webhook_url is set; the webhook already targets a channel, this just overrides it."
+  type        = string
+  default     = "#alerts"
+}
+
 variable "github_pat" {
   description = "GitHub Personal Access Token (repo + admin:repo_hook scopes). Required, no default - bootstraps the Jenkins job/credential and lets create.sh manage the GitHub webhook."
   type        = string

@@ -9,12 +9,13 @@ flowchart TD
     JK -->|docker push| ECR[(AWS ECR)]
     JK -->|commit values-images.yaml| GH
     GH -->|"webhook (poll every 180s as fallback)"| ARGO["ArgoCD CD<br/>sync Helm chart"]
-    ARGO -->|deploys| EKS["EKS Cluster<br/>frontend / backend"]
-    EKS -->|private subnet only| RDS[(RDS Postgres)]
+    ARGO -->|deploys| EKS["EKS Cluster<br/>nodes in private subnets"]
+    EKS -->|SG-restricted| RDS[(RDS Postgres)]
+    EKS -->|egress for image pulls| NAT[NAT Gateway]
     ASM[(AWS Secrets Manager)] -->|IRSA| ESO[External Secrets Operator]
     ESO -->|creates K8s Secret| EKS
     RDS -.->|AWS-managed master password| ASM
-    EKS --> MON[Prometheus / Grafana]
+    EKS --> MON["Prometheus / Grafana<br/>Alertmanager → Slack"]
 
     style GH fill:#24292e,color:#fff
     style ECR fill:#ff9900,color:#000
@@ -23,11 +24,12 @@ flowchart TD
     style EKS fill:#326ce5,color:#fff
     style ARGO fill:#ef7b4d,color:#fff
     style JK fill:#d33833,color:#fff
+    style NAT fill:#ff9900,color:#000
 ```
 
 ## Inside the Cluster
 
-Two EC2 instances back the EKS cluster as worker nodes (`t3.medium`, auto-scaling group sized 1-3, desired 2). Jenkins runs on a separate, third EC2 instance entirely outside the cluster - it never gets `kubectl`/cluster access at all (see Security).
+Two EC2 instances back the EKS cluster as worker nodes (`t3.medium`, auto-scaling group sized 1-3, desired 2). They sit in private subnets with no public IP; outbound traffic - kubelet pulling add-on images from registry.k8s.io / quay.io / docker.io - leaves through a single NAT gateway. Jenkins runs on a separate, third EC2 instance entirely outside the cluster, in a public subnet (it needs a public IP to receive GitHub webhooks), and never gets `kubectl`/cluster access at all (see Security).
 
 ```mermaid
 flowchart TD
@@ -63,7 +65,7 @@ flowchart TD
     style BESVC fill:#0b1f3a,color:#fff,stroke:#1a73e8,stroke-width:1px
 ```
 
-**Why this is locked down, not just "it works":** both app Services (`frontend-service`, `backend-service`) are `type: ClusterIP` - reachable only from inside the cluster's own network, with no direct pod IP, no NodePort, and no public IP. `ingress-nginx` is the *only* Service of type `LoadBalancer`, so it's the only thing with a public AWS ELB in front of it. RDS sits in private subnets with `publicly_accessible = false`, and its security group accepts port 5432 from the EKS nodes' security group only - not from a CIDR range, and not from the internet at all. Every request must enter through the ingress, which only forwards to `frontend-service`; the frontend calls the backend internally, and only the backend can reach the database.
+**Why this is locked down, not just "it works":** both app Services (`frontend-service`, `backend-service`) are `type: ClusterIP` - reachable only from inside the cluster's own network, with no direct pod IP, no NodePort, and no public IP. `ingress-nginx` is the *only* Service of type `LoadBalancer`, so it's the only thing with a public AWS ELB in front of it. The worker nodes are in private subnets with no public IP, so a mistaken security-group rule cannot expose them - there is no route from the internet to reach. RDS sits in private subnets with `publicly_accessible = false`, and its security group accepts port 5432 from the EKS nodes' security group only - not from a CIDR range, and not from the internet at all. Every request must enter through the ingress, which only forwards to `frontend-service`; the frontend calls the backend internally, and only the backend can reach the database.
 
 **Replica counts and why:** backend runs 3 replicas (stateless, so scaling it is free and gives some redundancy); frontend runs 1 (a lightweight proxy layer, no state). These aren't fixed forever - `backend.replicaCount` etc. in `values.yaml` are just numbers ArgoCD applies on every sync.
 
@@ -83,17 +85,18 @@ ArgoCD compares *state*, not files: it renders the chart under `path: gitops/tas
 
 | Component | Tool | Responsibility |
 |---|---|---|
-| Infra + cluster add-ons | Terraform | VPC/EKS/EC2/ECR/RDS + ingress-nginx, kube-prometheus-stack, argocd, external-secrets, EBS CSI driver |
+| Infra + cluster add-ons | Terraform | VPC (public + private subnets, NAT gateway), EKS, EC2, ECR, RDS + ingress-nginx, kube-prometheus-stack, argocd, external-secrets, EBS CSI driver |
 | CI | Jenkins | Build, scan (Trivy), push image, bump the GitOps tag file |
 | CD | ArgoCD | Applies the Helm chart, self-heals drift, prunes removed resources |
 | Database | RDS Postgres | Private subnets, SG-restricted to the EKS nodes, AWS-managed master password |
 | Secrets sync | External Secrets Operator | Syncs the RDS master secret from AWS Secrets Manager into a K8s Secret |
 | App packaging | Helm chart (`gitops/task-manager`) | backend + frontend + configmap + secret/externalsecret + ingress |
 | Ingress | ingress-nginx | Routes external traffic to the frontend |
-| Monitoring | kube-prometheus-stack | Prometheus (15d retention) and Grafana on persistent volumes; Alertmanager runs with the chart defaults - on emptyDir, and routing to a null receiver |
+| Monitoring | kube-prometheus-stack | Prometheus (15d retention) and Grafana on persistent volumes. Alertmanager routes `warning`/`critical` alerts to Slack when `TF_VAR_slack_webhook_url` is set, otherwise stays on the chart default (null receiver). Its own storage is still emptyDir |
 
 ## Security
 
+- Worker nodes: private subnets, no public IP. Egress is through one NAT gateway; there is no inbound path from the internet at all, so the node security group is a second layer rather than the only one.
 - Jenkins: IAM instance profile scoped to ECR push only - no static AWS keys, no cluster access.
 - External Secrets Operator: IRSA, read-only, scoped to the RDS master secret's exact ARN.
 - RDS: private subnets, `publicly_accessible = false`, storage encrypted, port 5432 open only to the EKS nodes' security group. Master password generated and rotated by AWS - never in Terraform state.
@@ -110,9 +113,9 @@ ArgoCD compares *state*, not files: it renders the chart under `path: gitops/tas
 1. Delete the ArgoCD Application (cascades, releases everything it deployed)
 2. Uninstall ingress-nginx, wait for its Load Balancer to release
 3. Delete the monitoring PVCs - the Prometheus volume comes from a StatefulSet template and the Grafana one from the chart's persistence block, and neither `helm uninstall` nor `terraform destroy` removes them, so their EBS volumes would outlive the cluster and keep billing. Alertmanager has no PVC: its storage is left at the chart default, which is emptyDir
-4. `terraform destroy` (RDS included - no final snapshot, so nothing is left to pay for)
+4. `terraform destroy` (RDS, NAT gateway and its Elastic IP included - no final snapshot, so nothing is left to pay for). The NAT gateway takes a couple of minutes to delete and its EIP releases after it
 5. Delete the two GitHub webhooks. The Jenkins EC2's public IP goes back to AWS's pool and is reassigned to another customer, so a webhook left behind would keep posting this repo's push payloads - commit messages, author names and emails - to a stranger's server
-6. `verify_cleanup()` checks AWS directly for anything left over
+6. `verify_cleanup()` checks AWS directly for anything left over - including a still-live NAT gateway (billed hourly) and an unassociated project Elastic IP
 
 See `destroy.sh` for the full script.
 
@@ -123,8 +126,9 @@ See `destroy.sh` for the full script.
 | RDS is single-AZ, no read replica | `multi_az = true` when uptime matters more than cost |
 | ECR repo names don't match `project_name` | Intentional - repos already hold image history |
 | The four add-on Helm releases install one after another, not in parallel | Required: the Helm provider shares one repository cache across concurrent `helm_release` resources and all but one fail with "no cached repo found". Costs a few minutes per run |
-| Alertmanager is deployed but has no receiver | The chart's default route points at a null receiver, so alerts are visible in its UI and go nowhere else. Wiring Slack or email is a values change, not an architectural one |
-| Worker nodes sit in public subnets with public IPs | Their security group admits only the cluster's own SG and the ingress load balancer's SG - nothing from the internet. Private subnets would need a NAT gateway (~$32/month) for image pulls |
+| One NAT gateway, not one per AZ | Halves the cost (~$32/month vs ~$64). If us-east-1a degrades, us-east-1b's nodes lose egress too. Production would run one per AZ |
+| Alertmanager's own storage is emptyDir | Silences and the notification log are lost on an Alertmanager pod restart - you may be re-paged for an alert you already silenced. A small PVC via `alertmanagerSpec.storage` fixes it; left out to keep the teardown surface small |
+| Alertmanager has no default Slack destination | Routing is off until `TF_VAR_slack_webhook_url` is set. Without a Slack workspace, alerts still reach Alertmanager's own UI |
 
 ## Jenkins Bootstrap
 

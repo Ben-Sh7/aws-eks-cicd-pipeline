@@ -89,6 +89,21 @@ locals {
     # forced the (immutable) gp3-tagged StorageClass to be replaced each time.
     ManagedBy = "IaC"
   }
+
+  # The in-tree AWS cloud provider discovers subnets for a Service
+  # type=LoadBalancer by these tags. Once the nodes move to private subnets
+  # (nat.tf) the internet-facing ELB has nowhere to land without role/elb on the
+  # public subnets - ingress-nginx comes up but its LoadBalancer stays
+  # <pending> forever. The cluster tag is what makes the provider consider the
+  # subnet at all; "shared" is what EKS uses for BYO subnets, so no tag fight.
+  public_subnet_lb_tags = {
+    "kubernetes.io/role/elb"                      = "1"
+    "kubernetes.io/cluster/${local.project_name}" = "shared"
+  }
+  private_subnet_lb_tags = {
+    "kubernetes.io/role/internal-elb"             = "1"
+    "kubernetes.io/cluster/${local.project_name}" = "shared"
+  }
 }
 
 resource "aws_vpc" "main" {
@@ -119,6 +134,7 @@ resource "aws_subnet" "public_1" {
 
   tags = merge(
     local.common_tags,
+    local.public_subnet_lb_tags,
     { Name = "${local.project_name}-public-subnet-1" }
   )
 }
@@ -131,6 +147,7 @@ resource "aws_subnet" "public_2" {
 
   tags = merge(
     local.common_tags,
+    local.public_subnet_lb_tags,
     { Name = "${local.project_name}-public-subnet-2" }
   )
 }
@@ -316,7 +333,9 @@ resource "aws_eks_cluster" "main" {
   version  = var.kubernetes_version
 
   vpc_config {
-    subnet_ids              = [aws_subnet.public_1.id, aws_subnet.public_2.id]
+    # Both public and private, so EKS puts the private-endpoint ENIs in the
+    # private subnets and every subnet carries the cluster tag.
+    subnet_ids              = [aws_subnet.public_1.id, aws_subnet.public_2.id, aws_subnet.private_1.id, aws_subnet.private_2.id]
     security_group_ids      = [aws_security_group.eks.id]
     endpoint_private_access = true
     endpoint_public_access  = true
@@ -364,8 +383,11 @@ resource "aws_eks_node_group" "main" {
   cluster_name    = aws_eks_cluster.main.name
   node_group_name = "${local.project_name}-nodes"
   node_role_arn   = aws_iam_role.eks_node_role.arn
-  subnet_ids      = [aws_subnet.public_1.id, aws_subnet.public_2.id]
-  version         = var.kubernetes_version
+  # Private subnets: the nodes get no public IP, and nothing on the internet has
+  # a route to them even if a security group rule were opened by mistake.
+  # Egress for image pulls goes through the NAT gateway (nat.tf).
+  subnet_ids = [aws_subnet.private_1.id, aws_subnet.private_2.id]
+  version    = var.kubernetes_version
 
   scaling_config {
     desired_size = var.node_desired_size

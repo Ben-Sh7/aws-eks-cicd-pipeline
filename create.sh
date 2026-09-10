@@ -402,8 +402,9 @@ get_access_info() {
     echo "  ./destroy.sh"
 
     echo -e "\n${GREEN}Cost tracking:${NC}"
-    echo "  This infrastructure costs ~\$139+/month if left running 24/7"
-    echo "  For a few hours of testing: ~\$2-5"
+    echo "  This infrastructure costs ~\$170+/month if left running 24/7"
+    echo "  (~\$139 EKS/RDS/EC2 + ~\$32 NAT gateway)"
+    echo "  For a few hours of testing: ~\$3-6"
 }
 
 main() {
