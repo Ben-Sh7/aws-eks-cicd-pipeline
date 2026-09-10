@@ -207,10 +207,23 @@ resource "aws_security_group" "eks" {
 # them here keeps the Jenkins ingress rule correct without pinning a list that
 # silently goes stale - if this endpoint is unreachable the plan fails loudly
 # rather than falling back to 0.0.0.0/0.
+#
+# The timeout is not optional. This provider defaults to no timeout at all, so a
+# host that accepts the connection and then never answers - a corporate proxy, a
+# firewall dropping packets silently, an outage at GitHub - leaves `terraform
+# plan` hanging forever with no output and no error. Ten seconds and one retry,
+# then fail with something readable.
 data "http" "github_meta" {
   url = "https://api.github.com/meta"
   request_headers = {
     Accept = "application/vnd.github+json"
+  }
+
+  request_timeout_ms = 10000
+
+  retry {
+    attempts     = 2
+    min_delay_ms = 1000
   }
 }
 
