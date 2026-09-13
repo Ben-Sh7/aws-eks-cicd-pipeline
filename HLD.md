@@ -1,150 +1,221 @@
-# DevOps Task Manager — High Level Design
+# High Level Design
+
+## The idea in one line
+
+**Jenkins cannot touch the cluster.** It writes the new image tag to Git. ArgoCD reads Git and deploys.
+
+That split is why a compromised CI server can't reach production, and why `git revert` is a rollback.
+
+---
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    Dev([Developer]) -->|git push| GH[(GitHub repo)]
-    GH -->|webhook| JK["Jenkins CI<br/>build → push → bump tag"]
-    JK -->|docker push| ECR[(AWS ECR)]
-    JK -->|commit values-images.yaml| GH
-    GH -->|"webhook (poll every 180s as fallback)"| ARGO["ArgoCD CD<br/>sync Helm chart"]
-    ARGO -->|deploys| EKS["EKS Cluster<br/>nodes in private subnets"]
-    EKS -->|SG-restricted| RDS[(RDS Postgres)]
-    EKS -->|egress for image pulls| NAT[NAT Gateway]
-    ASM[(AWS Secrets Manager)] -->|IRSA| ESO[External Secrets Operator]
-    ESO -->|creates K8s Secret| EKS
-    RDS -.->|AWS-managed master password| ASM
-    EKS --> MON["Prometheus / Grafana<br/>Alertmanager → Slack"]
+![task-manager AWS architecture: a commit becoming a running pod (1-7), and a user request reaching the database (A-E)](docs/architecture.png)
 
-    style GH fill:#24292e,color:#fff
-    style ECR fill:#ff9900,color:#000
-    style ASM fill:#ff9900,color:#000
-    style RDS fill:#3b48cc,color:#fff
-    style EKS fill:#326ce5,color:#fff
-    style ARGO fill:#ef7b4d,color:#fff
-    style JK fill:#d33833,color:#fff
-    style NAT fill:#ff9900,color:#000
-```
+---
 
-## Inside the Cluster
+## Inside the cluster
 
-Two EC2 instances back the EKS cluster as worker nodes (`t3.medium`, auto-scaling group sized 1-3, desired 2). They sit in private subnets with no public IP; outbound traffic - kubelet pulling add-on images from registry.k8s.io / quay.io / docker.io - leaves through a single NAT gateway. Jenkins runs on a separate, third EC2 instance entirely outside the cluster, in a public subnet (it needs a public IP to receive GitHub webhooks), and never gets `kubectl`/cluster access at all (see Security).
+Three EC2 instances:
 
-```mermaid
-flowchart TD
-    User(["👤 User's browser"]) -->|"only public entry point"| ING["🌐 ingress-nginx<br/>type: LoadBalancer"]
+| | Where | Why |
+|---|---|---|
+| **2 × worker nodes** | Private subnets, no public IP | Run the app. ASG 1–3, desired 2 |
+| **1 × Jenkins** | Public subnet | Needs a public IP for GitHub webhooks. No cluster access |
 
-    subgraph EKS["EKS Cluster — 2x EC2 worker nodes (t3.medium)"]
-        direction TB
-        FE["frontend-service · ClusterIP<br/>1 pod"]
+The nodes need internet access to pull images. That goes out through one NAT gateway.
 
-        subgraph BESVC["backend-service · ClusterIP (load-balanced)"]
-            direction LR
-            BE1["backend pod #1"]
-            BE2["backend pod #2"]
-            BE3["backend pod #3"]
-        end
+![Inside the cluster: browser to ingress to frontend to backend to database, every hop a ClusterIP Service](docs/inside-the-cluster.png)
 
-        FE -->|"internal DNS name<br/>not reachable from outside"| BESVC
-    end
+### One way in
 
-    BE1 & BE2 & BE3 -->|"private subnet, SG-restricted"| DB[("RDS Postgres<br/>private subnets")]
+Browser → ingress → frontend → backend → database. Nothing skips a step.
 
-    ING --> FE
+- Both app Services are `ClusterIP`. No pod IP, no NodePort, no public IP
+- `ingress-nginx` is the only `LoadBalancer`, so it's the only public entry point
+- Worker nodes have no public IP, so a bad firewall rule can't expose them
+- RDS accepts port 5432 from the nodes' security group only — not a CIDR, not the internet
 
-    classDef public fill:#009639,color:#fff
-    classDef internal fill:#1a73e8,color:#fff
-    classDef db fill:#3b48cc,color:#fff
-    classDef user fill:#555,color:#fff
-    class ING public
-    class FE,BE1,BE2,BE3 internal
-    class DB db
-    class User user
-    style EKS fill:#0b1f3a,color:#fff,stroke:#326ce5,stroke-width:2px
-    style BESVC fill:#0b1f3a,color:#fff,stroke:#1a73e8,stroke-width:1px
-```
+**Replicas:** backend runs 3 (stateless, so it's cheap redundancy), frontend runs 1. Change the number in `values.yaml` and ArgoCD applies it on the next sync.
 
-**Why this is locked down, not just "it works":** both app Services (`frontend-service`, `backend-service`) are `type: ClusterIP` - reachable only from inside the cluster's own network, with no direct pod IP, no NodePort, and no public IP. `ingress-nginx` is the *only* Service of type `LoadBalancer`, so it's the only thing with a public AWS ELB in front of it. The worker nodes are in private subnets with no public IP, so a mistaken security-group rule cannot expose them - there is no route from the internet to reach. RDS sits in private subnets with `publicly_accessible = false`, and its security group accepts port 5432 from the EKS nodes' security group only - not from a CIDR range, and not from the internet at all. Every request must enter through the ingress, which only forwards to `frontend-service`; the frontend calls the backend internally, and only the backend can reach the database.
+---
 
-**Replica counts and why:** backend runs 3 replicas (stateless, so scaling it is free and gives some redundancy); frontend runs 1 (a lightweight proxy layer, no state). These aren't fixed forever - `backend.replicaCount` etc. in `values.yaml` are just numbers ArgoCD applies on every sync.
+## Key flows
 
-## Key Flows
+**CI** — push → build → Trivy scan → push to ECR → bump the tag file → commit
 
-**CI (Jenkins):** push → build image → push to ECR → bump image tag in `values-images.yaml` → commit + push.
+**CD** — webhook → merge the values files → sync the chart → Kubernetes rolls out
 
-**CD (ArgoCD):** GitHub webhook (or the 180s reconciliation poll, whichever comes first) → merges `values.yaml` + `values-images.yaml` → syncs the Helm chart → Kubernetes rolls out the new pods.
+**Secrets** — External Secrets Operator reads the RDS password from Secrets Manager over IRSA, and writes it into a K8s Secret. AWS rotates that password itself, so it never enters Terraform state or Git.
 
-ArgoCD compares *state*, not files: it renders the chart under `path: gitops/task-manager` and diffs the result against the live cluster. A commit that touches only `terraform/` or `app/` renders identical manifests and changes nothing. Equally, a change made directly against the cluster with `kubectl edit` matches no commit at all and is still reverted, because `selfHeal` acts on the diff rather than on a file event.
+<details>
+<summary>Why ArgoCD ignores most commits — and reverts changes you never committed</summary>
 
-**Secrets (External Secrets Operator):** reads the RDS master secret - which AWS generates and rotates itself, so the password never enters Terraform state or git - from Secrets Manager via IRSA → creates/refreshes the `app-secret` K8s Secret → backend pods read it as `DB_USER`/`DB_PASSWORD`.
+<br>
 
-**Wiring the dynamic values:** the RDS endpoint, the name AWS gives its master secret, and the two ECR registry URLs (which embed the AWS account id) only exist after `terraform apply` and differ per deployment, so they can't be committed to git. `create.sh` reads them from `terraform output` and injects them into the ArgoCD Application as helm parameters, which keeps the chart itself fully generic - deploying into a different AWS account needs no edit to the chart.
+ArgoCD compares **state**, not files. It renders the chart under `path: gitops/task-manager` and diffs the result against the live cluster.
+
+Two consequences:
+
+- A commit touching only `terraform/` or `app/` renders identical manifests. Nothing happens.
+- A `kubectl edit` against the cluster matches no commit at all. `selfHeal` reverts it.
+
+It acts on the difference, not on a file changing.
+
+</details>
+
+<details>
+<summary>How account-specific values reach the chart without being committed</summary>
+
+<br>
+
+Three values can't live in Git: the RDS endpoint, the name AWS gives its master secret, and the two ECR registry URLs. All three embed account-specific data and only exist after `terraform apply`.
+
+`create.sh` reads them from `terraform output` and injects them into the ArgoCD Application as Helm parameters.
+
+The chart itself stays generic. Deploying into a different AWS account needs no edit to it.
+
+</details>
+
+---
 
 ## Components
 
-| Component | Tool | Responsibility |
+| Component | Tool | Job |
 |---|---|---|
-| Infra + cluster add-ons | Terraform | VPC (public + private subnets, NAT gateway), EKS, EC2, ECR, RDS + ingress-nginx, kube-prometheus-stack, argocd, external-secrets, EBS CSI driver |
-| CI | Jenkins | Build, scan (Trivy), push image, bump the GitOps tag file |
-| CD | ArgoCD | Applies the Helm chart, self-heals drift, prunes removed resources |
-| Database | RDS Postgres | Private subnets, SG-restricted to the EKS nodes, AWS-managed master password |
-| Secrets sync | External Secrets Operator | Syncs the RDS master secret from AWS Secrets Manager into a K8s Secret |
-| App packaging | Helm chart (`gitops/task-manager`) | backend + frontend + configmap + secret/externalsecret + ingress |
-| Ingress | ingress-nginx | Routes external traffic to the frontend |
-| Monitoring | kube-prometheus-stack | Prometheus (15d retention) and Grafana on persistent volumes. Alertmanager routes `warning`/`critical` alerts to Slack when `TF_VAR_slack_webhook_url` is set, otherwise stays on the chart default (null receiver). Its own storage is still emptyDir |
+| Infra + add-ons | Terraform | VPC, EKS, EC2, ECR, RDS, and the four cluster add-ons |
+| CI | Jenkins | Build, scan, push, bump the tag file |
+| CD | ArgoCD | Apply the chart, self-heal drift, prune |
+| Database | RDS Postgres | Private, SG-restricted, AWS-managed password |
+| Secrets | External Secrets Operator | Secrets Manager → K8s Secret |
+| Packaging | Helm chart | Deployments, Services, ConfigMap, Secret, Ingress |
+| Ingress | ingress-nginx | The single public entry point |
+| Monitoring | kube-prometheus-stack | Prometheus, Grafana, Alertmanager |
+
+---
+
+## Alerting
+
+`warning` and `critical` alerts go to Slack when `TF_VAR_slack_webhook_url` is set. Without it they still reach Alertmanager's UI.
+
+Three things are silenced on purpose:
+
+| Silenced | Why |
+|---|---|
+| `Watchdog` | Fires permanently by design — you alert on its *absence* |
+| `InfoInhibitor` | Internal plumbing, never actionable |
+| scheduler / controller-manager / etcd | EKS runs these on AWS's side and doesn't expose them |
+
+**An alert that always fires is worse than no alert.** It teaches you to ignore the channel.
+
+`kube-proxy` stays enabled — it genuinely runs here.
+
+---
 
 ## Security
 
-- Worker nodes: private subnets, no public IP. Egress is through one NAT gateway; there is no inbound path from the internet at all, so the node security group is a second layer rather than the only one.
-- Jenkins: IAM instance profile scoped to ECR push only - no static AWS keys, no cluster access.
-- External Secrets Operator: IRSA, read-only, scoped to the RDS master secret's exact ARN.
-- RDS: private subnets, `publicly_accessible = false`, storage encrypted, port 5432 open only to the EKS nodes' security group. Master password generated and rotated by AWS - never in Terraform state.
-- Grafana: ClusterIP only, reachable via `kubectl port-forward`.
-- ArgoCD: ClusterIP, with exactly one path published through the ingress - `/api/webhook`, declared `pathType: Exact`, so the UI, `/api/v1`, and the gRPC endpoint are not routable from outside. Payloads must carry GitHub's HMAC signature over a Terraform-generated shared secret, so the open path cannot be used to force syncs. The UI stays `kubectl port-forward` only.
-- Jenkins network exposure: port 8080 is reachable from GitHub's published webhook ranges (read at plan time from `api.github.com/meta`, so the rule follows GitHub) plus the single operator IP `create.sh` detects at run time. There is no SSH rule at all - the instance is reached through SSM Session Manager, which needs no inbound port. This matters because that host holds the GitHub PAT and ECR push rights.
-- Jenkins itself: authenticated (single admin account), not left open on the setup wizard's default of no login. Its webhook endpoint verifies GitHub's HMAC signature over the payload, so reaching port 8080 is not by itself enough to start a build - the network restriction above is no longer the only thing in the way.
-- Database connections: RDS runs with `rds.force_ssl=1` and the backend verifies the server certificate against the Amazon RDS CA bundle baked into its image, rather than the usual `rejectUnauthorized: false`, which encrypts without authenticating.
-- Runtime images: built on a current Node LTS with `npm` left out of the runtime stage - `npm`'s own bundled dependencies were the last HIGH findings standing between the image and a clean Trivy scan.
-- CI: Trivy scans both images for HIGH/CRITICAL CVEs and fails the build before anything reaches ECR - installed on the Jenkins EC2 pinned to a fixed, checksum-verified version, not a floating "latest" tag (Trivy's own release pipeline was compromised twice in 2026 via poisoned releases/tags).
+**Network**
 
-## Cleanup Order
-
-1. Delete the ArgoCD Application (cascades, releases everything it deployed)
-2. Uninstall ingress-nginx, wait for its Load Balancer to release
-3. Delete the monitoring PVCs - the Prometheus volume comes from a StatefulSet template and the Grafana one from the chart's persistence block, and neither `helm uninstall` nor `terraform destroy` removes them, so their EBS volumes would outlive the cluster and keep billing. Alertmanager has no PVC: its storage is left at the chart default, which is emptyDir
-4. `terraform destroy` (RDS, NAT gateway and its Elastic IP included - no final snapshot, so nothing is left to pay for). The NAT gateway takes a couple of minutes to delete and its EIP releases after it
-5. Delete the two GitHub webhooks. The Jenkins EC2's public IP goes back to AWS's pool and is reassigned to another customer, so a webhook left behind would keep posting this repo's push payloads - commit messages, author names and emails - to a stranger's server
-6. `verify_cleanup()` checks AWS directly for anything left over - including a still-live NAT gateway (billed hourly) and an unassociated project Elastic IP
-
-See `destroy.sh` for the full script.
-
-## Known Limitations
-
-| Limitation | Mitigation |
+| | |
 |---|---|
-| RDS is single-AZ, no read replica | `multi_az = true` when uptime matters more than cost |
-| ECR repo names don't match `project_name` | Intentional - repos already hold image history |
-| The four add-on Helm releases install one after another, not in parallel | Required: the Helm provider shares one repository cache across concurrent `helm_release` resources and all but one fail with "no cached repo found". Costs a few minutes per run |
-| One NAT gateway, not one per AZ | Halves the cost (~$32/month vs ~$64). If us-east-1a degrades, us-east-1b's nodes lose egress too. Production would run one per AZ |
-| Alertmanager's own storage is emptyDir | Silences and the notification log are lost on an Alertmanager pod restart - you may be re-paged for an alert you already silenced. A small PVC via `alertmanagerSpec.storage` fixes it; left out to keep the teardown surface small |
-| Alertmanager has no default Slack destination | Routing is off until `TF_VAR_slack_webhook_url` is set. Without a Slack workspace, alerts still reach Alertmanager's own UI |
+| Worker nodes | Private subnets, no public IP. Egress via NAT only |
+| Jenkins :8080 | Your IP + GitHub's webhook ranges. Nothing else |
+| Jenkins SSH | **None.** Access is through SSM Session Manager |
+| Grafana | ClusterIP. `port-forward` only |
+| ArgoCD | ClusterIP, with one path exposed: `/api/webhook`, `pathType: Exact` |
 
-## Jenkins Bootstrap
+**Identity**
 
-`aws_instance.jenkins`'s `user_data` (see `terraform/templates/`) installs Jenkins/Docker/AWS CLI on first boot, then drops a Groovy script into `init.groovy.d/` that runs as Jenkins starts:
-1. Creates a single admin account (skips the setup wizard, which would otherwise leave Jenkins with no login)
-2. Creates the `github-credentials` credential from `github_pat`
-3. Creates the `task-manager` Pipeline job (SCM = this repo, Script Path = `Jenkinsfile`, GitHub push trigger)
+| | |
+|---|---|
+| Jenkins | IAM instance profile, ECR push only. No static keys, no cluster access |
+| External Secrets | IRSA, read-only, scoped to one secret ARN |
+| RDS | Not public, encrypted, password created and rotated by AWS |
 
-The Jenkins apt signing key is pinned *and* its key id is verified before the repository is trusted, so a key rotation on Jenkins' side fails the bootstrap loudly instead of silently installing from an unsigned repository.
+**Both webhooks verify GitHub's HMAC signature.** Reaching the port isn't enough to trigger anything — so the firewall rules above are a second layer, not the only one.
 
-`create.sh` then points the GitHub webhook at the new EC2's IP (re-pointing it every run, since the IP changes each time) and registers the second webhook that drives ArgoCD.
+<details>
+<summary>Supply chain and runtime hardening</summary>
+
+<br>
+
+**Trivy gates the build.** HIGH and CRITICAL CVEs fail it before anything reaches ECR.
+
+Trivy itself is pinned to a fixed version and checksum-verified, not pulled from a floating `latest`. Its own release pipeline was compromised twice in 2026 via poisoned releases.
+
+**Runtime images** run a current Node LTS with `npm` removed from the final stage. npm's bundled dependencies were the last HIGH findings standing between the image and a clean scan.
+
+**Database connections use TLS with certificate verification** against the Amazon RDS CA bundle baked into the image. Not `rejectUnauthorized: false`, which encrypts without authenticating.
+
+**Jenkins' apt key is pinned and its key id verified** before the repo is trusted. A key rotation fails the bootstrap loudly instead of silently installing from an unsigned source.
+
+</details>
+
+---
+
+## Teardown
+
+Order matters — each step frees something the next one needs gone.
+
+1. Delete the ArgoCD Application *(cascades)*
+2. Uninstall ingress-nginx, wait for its Load Balancer to disappear
+3. Delete the monitoring PVCs
+4. `terraform destroy` — RDS, NAT gateway and Elastic IP included
+5. Sweep for orphaned EBS volumes
+6. Delete the two GitHub webhooks
+7. `verify_cleanup()` — check AWS directly for anything still billing
+
+<details>
+<summary>Why steps 5 and 6 exist</summary>
+
+<br>
+
+**Step 5 — the PVC deletion in step 3 isn't reliable.**
+
+Deleting a PVC is asynchronous. The CSI driver only *then* calls AWS to delete the volume. But `terraform destroy` tears that driver down along with the cluster, so the call can be lost and the volumes survive — billed hourly, and invisible unless someone reads the output closely.
+
+Step 5 sweeps up whatever is left, matching on the `Project` tag. It doesn't depend on the driver still being alive. This has caught volumes on every teardown so far.
+
+**Step 6 — a leftover webhook leaks data.**
+
+The Jenkins EC2's public IP goes back to AWS's pool and gets reassigned to another customer. A webhook left pointing at it would keep posting this repo's push payloads — commit messages, author names, email addresses — to a stranger's server.
+
+</details>
+
+See `destroy.sh` for the implementation.
+
+---
+
+## Known limitations
+
+| Limitation | Trade-off |
+|---|---|
+| RDS is single-AZ | `multi_az = true` when uptime beats cost |
+| One NAT gateway, not one per AZ | ~$32/month instead of ~$64. An AZ outage takes egress for both |
+| Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
+| Alertmanager storage is `emptyDir` | Silences are lost on a pod restart. A ~1Gi PVC fixes it |
+| No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
+| No app-specific alerts | Current rules catch a crashed pod, not a backend returning 500s |
+| ECR names don't match `project_name` | Intentional — those repos already hold image history |
+
+---
+
+## Jenkins bootstrap
+
+`user_data` installs Jenkins, Docker and the AWS CLI on first boot. A Groovy script then runs as Jenkins starts and creates:
+
+1. The admin account *(skipping the setup wizard, which would leave Jenkins with no login)*
+2. The `github-credentials` credential
+3. The `task-manager` pipeline job, wired to this repo
+
+`create.sh` then points both webhooks at the new instance.
+
+---
 
 ## Deployment
 
 ```bash
-cp .env.example .env   # fill in real values - see comments in that file
-./create.sh             # bring everything up
-./destroy.sh            # tear everything down
+cp .env.example .env   # fill in real values
+./create.sh            # up
+./destroy.sh           # down
 ```

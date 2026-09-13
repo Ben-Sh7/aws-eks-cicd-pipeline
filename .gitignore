@@ -33,4 +33,11 @@ terraform/*.tfvars.json
 !terraform/*.tfvars.example
 
 # Local working notes - handover prompts, scratch plans. Not part of the project.
-docs/
+# Note the trailing /*: an ignored *directory* is never descended into, so a
+# plain "docs/" would make the negations below silently do nothing.
+docs/*
+
+# ...except the two diagram images HLD.md renders. Everything else in docs/,
+# including the .drawio sources, stays local.
+!docs/architecture.png
+!docs/inside-the-cluster.png
