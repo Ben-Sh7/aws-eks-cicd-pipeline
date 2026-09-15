@@ -35,17 +35,29 @@ spec:
             configMapKeyRef:
               name: app-config
               key: BACKEND_URL
+        - name: APP_URL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: APP_URL
+        # Set here as well as in the Dockerfile: the container runtime sets
+        # HOSTNAME to the pod name, and Next.js would then listen only on the
+        # address that name resolves to instead of on every interface.
+        - name: HOSTNAME
+          value: "0.0.0.0"
         resources:
           {{- toYaml .Values.frontend.resources | nindent 10 }}
+        # /api/health, not /: the root page redirects to /login, which would
+        # count as healthy even if the app behind it were broken.
         livenessProbe:
           httpGet:
-            path: /
+            path: /api/health
             port: {{ .Values.frontend.port }}
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
-            path: /
+            path: /api/health
             port: {{ .Values.frontend.port }}
           initialDelaySeconds: 5
           periodSeconds: 5

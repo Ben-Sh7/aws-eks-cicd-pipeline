@@ -36,32 +36,44 @@ frontend:
       memory: 512Mi
 
 # Non-sensitive shared configuration (rendered into the app-config ConfigMap).
-# dbHost is empty on purpose: the RDS endpoint only exists after terraform
-# apply, so create.sh passes it in as an ArgoCD helm parameter.
+# dbHost and appUrl are empty on purpose: the RDS endpoint and the ingress
+# LoadBalancer's address only exist after terraform apply, so create.sh passes
+# them in as ArgoCD helm parameters.
+#
+# Google sign-in is deliberately not configured here: Google requires HTTPS
+# and a fixed domain for its redirect URI, which this deployment does not
+# have. Without GOOGLE_CLIENT_ID the app runs with username + password only.
 config:
   dbHost: ""
   dbPort: "5432"
   dbName: tasksdb
   backendUrl: http://backend-service:3001
   backendPort: "3001"
+  # The exact address users open, e.g. http://<elb-hostname>. The frontend
+  # accepts sign-ins and form submissions only from this origin (CSRF
+  # protection), so the chart refuses to render without it.
+  appUrl: ""
   # Path to the Amazon RDS CA bundle inside the backend image. Set means the
   # DB connection is TLS with certificate verification; empty means plaintext,
   # which only makes sense against a local Postgres.
   dbSslCa: /app/rds-ca.pem
 
-# mode: externalSecrets (default) - pulls the RDS master credentials from
-#   AWS Secrets Manager via the External Secrets Operator. No real
-#   credentials here. awsSecretName is empty for the same reason as dbHost:
-#   AWS generates the secret's name, so create.sh passes it in.
-# mode: local - renders a plain Secret from dbUser/dbPassword below, for
-#   local/demo use only (via a gitignored values-secret.yaml).
+# mode: externalSecrets (default) - pulls the RDS master credentials and the
+#   JWT signing key from AWS Secrets Manager via the External Secrets
+#   Operator. No real credentials here. awsSecretName and jwtSecretName are
+#   empty for the same reason as dbHost: AWS generates the names, so create.sh
+#   passes them in.
+# mode: local - renders a plain Secret from dbUser/dbPassword/jwtSecret below,
+#   for local/demo use only (via a gitignored values-secret.yaml).
 secrets:
   mode: externalSecrets
   awsRegion: us-east-1
   awsSecretName: ""
+  jwtSecretName: ""
   refreshInterval: 1h
   dbUser: ""
   dbPassword: ""
+  jwtSecret: ""
 
 ingress:
   enabled: true

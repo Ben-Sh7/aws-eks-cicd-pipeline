@@ -182,6 +182,8 @@ create_infrastructure() {
     GITHUB_REPO=$(terraform output -raw github_repo 2>/dev/null || echo "Ben-Sh7/aws-eks-cicd-pipeline")
     RDS_ENDPOINT=$(terraform output -raw rds_endpoint 2>/dev/null)
     RDS_SECRET=$(terraform output -raw rds_master_secret_name 2>/dev/null)
+    JWT_SECRET_NAME=$(terraform output -raw jwt_secret_name 2>/dev/null)
+    JENKINS_ADMIN_SECRET=$(terraform output -raw jenkins_admin_secret_name 2>/dev/null)
 
     cd "$PROJECT_DIR"
 }
@@ -271,6 +273,9 @@ configure_argocd_webhook() {
         sleep 10
     done
 
+    # Kept for register_argocd_app: the frontend's APP_URL is this same address.
+    INGRESS_HOSTNAME="$lb"
+
     if [ -z "$lb" ]; then
         echo -e "${YELLOW}WARNING: the ingress LoadBalancer has no hostname yet - skipping the ArgoCD webhook.${NC}"
         echo -e "${YELLOW}ArgoCD still syncs on its own poll; re-run create.sh to add the hook.${NC}"
@@ -316,10 +321,10 @@ register_argocd_app() {
         sleep 10
     done
 
-    # The RDS endpoint, the name AWS generated for the RDS master secret, and
-    # the ECR registry URLs (which embed the AWS account id) only exist after
-    # apply and differ per deployment, so they can't live in git - they're
-    # injected here as helm parameters instead.
+    # The RDS endpoint, the names of the RDS master secret and the JWT secret,
+    # the ECR registry URLs (which embed the AWS account id) and the app's own
+    # address only exist after apply and differ per deployment, so they can't
+    # live in git - they're injected here as helm parameters instead.
     if [ -z "$RDS_ENDPOINT" ] || [ -z "$RDS_SECRET" ]; then
         print_error "Could not read the RDS outputs from Terraform - aborting before the app is registered."
         exit 1
@@ -330,7 +335,31 @@ register_argocd_app() {
         exit 1
     fi
 
-    awk -v ep="$RDS_ENDPOINT" -v sec="$RDS_SECRET" -v be="$BACKEND_REPO" -v fe="$FRONTEND_REPO" '
+    if [ -z "$JWT_SECRET_NAME" ]; then
+        print_error "Could not read the JWT secret name from Terraform - aborting before the app is registered."
+        exit 1
+    fi
+
+    # The frontend accepts sign-ins and form submissions only from APP_URL
+    # (CSRF protection), so it has to be the exact address users open: the
+    # ingress LoadBalancer's DNS name, which is new on every create.
+    if [ -z "$INGRESS_HOSTNAME" ]; then
+        print_step "Waiting for the ingress LoadBalancer's address..."
+        for i in $(seq 1 30); do
+            INGRESS_HOSTNAME=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            [ -n "$INGRESS_HOSTNAME" ] && break
+            sleep 10
+        done
+    fi
+    if [ -z "$INGRESS_HOSTNAME" ]; then
+        print_error "The ingress LoadBalancer has no address after 5 minutes - aborting before the app is registered."
+        print_error "Check: kubectl get svc -n ingress-nginx ingress-nginx-controller - then re-run create.sh."
+        exit 1
+    fi
+    APP_URL="http://${INGRESS_HOSTNAME}"
+
+    awk -v ep="$RDS_ENDPOINT" -v sec="$RDS_SECRET" -v be="$BACKEND_REPO" -v fe="$FRONTEND_REPO" \
+        -v jwt="$JWT_SECRET_NAME" -v url="$APP_URL" '
         { print }
         /- values-images.yaml/ {
             print "      parameters:"
@@ -338,6 +367,10 @@ register_argocd_app() {
             print "          value: \"" ep "\""
             print "        - name: secrets.awsSecretName"
             print "          value: \"" sec "\""
+            print "        - name: secrets.jwtSecretName"
+            print "          value: \"" jwt "\""
+            print "        - name: config.appUrl"
+            print "          value: \"" url "\""
             print "        - name: backend.image.repository"
             print "          value: \"" be "\""
             print "        - name: frontend.image.repository"
@@ -345,8 +378,59 @@ register_argocd_app() {
         }
     ' "$ARGOCD_APP" | kubectl apply -f -
 
-    print_success "ArgoCD Application 'task-manager' registered (DB host: $RDS_ENDPOINT)"
+    print_success "ArgoCD Application 'task-manager' registered (DB host: $RDS_ENDPOINT, app: $APP_URL)"
     print_step "ArgoCD will now sync gitops/task-manager from git automatically (initial sync may take a minute)."
+}
+
+# ECR is recreated empty on every create, and the Jenkins job otherwise builds
+# only on a GitHub push - so without this the pods would sit in
+# ImagePullBackOff until the next push. Starts one build through the Jenkins
+# API instead. Not fatal: if it fails, "Build Now" in the Jenkins UI does the same.
+trigger_first_build() {
+    print_header "STARTING THE FIRST JENKINS BUILD"
+
+    local jenkins="http://${JENKINS_IP}:8080"
+    local password
+    password=$(aws secretsmanager get-secret-value --secret-id "$JENKINS_ADMIN_SECRET" --query SecretString --output text 2>/dev/null || true)
+    if [ -z "$JENKINS_IP" ] || [ -z "$password" ]; then
+        echo -e "${YELLOW}WARNING: could not read the Jenkins address or admin password - start the first build with \"Build Now\" in the Jenkins UI.${NC}"
+        return 0
+    fi
+
+    # The password reaches curl through a config file on a file descriptor,
+    # never on the command line, where other processes could read it.
+    jenkins_curl() {
+        curl -s --max-time 30 -K <(printf 'user = "admin:%s"\n' "$password") "$@"
+    }
+
+    print_step "Waiting for Jenkins to finish its first boot (up to 15 minutes)..."
+    local i status=""
+    for i in $(seq 1 60); do
+        status=$(jenkins_curl -o /dev/null -w '%{http_code}' "$jenkins/job/task-manager/api/json" || true)
+        [ "$status" = "200" ] && break
+        sleep 15
+    done
+    if [ "$status" != "200" ]; then
+        echo -e "${YELLOW}WARNING: Jenkins did not answer within 15 minutes (last HTTP $status) - start the first build with \"Build Now\" at $jenkins.${NC}"
+        return 0
+    fi
+
+    # Jenkins rejects a POST without a CSRF crumb, and the crumb is only valid
+    # together with the session cookie it was issued with.
+    local cookies crumb
+    cookies=$(mktemp)
+    crumb=$(jenkins_curl -c "$cookies" "$jenkins/crumbIssuer/api/json" \
+        | jq -r 'if .crumb then "\(.crumbRequestField): \(.crumb)" else empty end' 2>/dev/null \
+        | tr -d '\015' || true)
+    status=$(jenkins_curl -b "$cookies" ${crumb:+-H "$crumb"} -o /dev/null -w '%{http_code}' \
+        -X POST "$jenkins/job/task-manager/build" || true)
+    rm -f "$cookies"
+
+    if [ "$status" = "201" ]; then
+        print_success "First build queued - images reach ECR in ~5-10 minutes, then ArgoCD rolls the app out"
+    else
+        echo -e "${YELLOW}WARNING: Jenkins did not accept the build (HTTP $status) - start it with \"Build Now\" at $jenkins.${NC}"
+    fi
 }
 
 get_access_info() {
@@ -379,8 +463,12 @@ get_access_info() {
     echo "  Then open https://localhost:8081  (user: admin, password:"
     echo "  kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
 
-    echo -e "\n${GREEN}Ingress (app entrypoint):${NC}"
-    echo "  kubectl get svc -n ingress-nginx ingress-nginx-controller   # find the external LoadBalancer hostname"
+    echo -e "\n${GREEN}The app (HTTP, sign up with a username and password):${NC}"
+    if [ -n "$APP_URL" ]; then
+        echo "  $APP_URL   - ready once the first Jenkins build has deployed (~10 minutes)"
+    else
+        echo "  kubectl get svc -n ingress-nginx ingress-nginx-controller   # find the external LoadBalancer hostname"
+    fi
 
     echo -e "\n${GREEN}Kubernetes:${NC}"
     echo "  View pods: kubectl get pods"
@@ -391,7 +479,7 @@ get_access_info() {
 
     if [ "$INFRA_ONLY" = true ]; then
         echo -e "\n${YELLOW}--infra-only was used: the app was NOT registered with ArgoCD.${NC}"
-        echo "  Register it later with: kubectl apply -f gitops/argocd-application.yaml"
+        echo "  Register it later by re-running ./create.sh without --infra-only (it injects the runtime parameters)."
     fi
 
     echo -e "\n${GREEN}Database:${NC} RDS Postgres at ${RDS_ENDPOINT:-<pending>}"
@@ -421,6 +509,7 @@ main() {
 
     if [ "$INFRA_ONLY" = false ]; then
         register_argocd_app
+        trigger_first_build
     fi
 
     get_access_info

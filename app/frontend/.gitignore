@@ -1,0 +1,7 @@
+# Next.js-specific only. Everything general - node_modules, dist, *.log,
+# .DS_Store and all .env files - lives in the repo's root .gitignore.
+/.next/
+/out/
+/coverage
+next-env.d.ts
+*.tsbuildinfo

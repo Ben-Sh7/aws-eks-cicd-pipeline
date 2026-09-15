@@ -89,6 +89,16 @@ output "jenkins_webhook_secret_name" {
   value       = aws_secretsmanager_secret.jenkins_webhook.name
 }
 
+output "jenkins_admin_secret_name" {
+  description = "Secrets Manager entry holding the Jenkins admin password. create.sh reads it to start the first build through the Jenkins API; the value is never printed."
+  value       = aws_secretsmanager_secret.jenkins_admin.name
+}
+
+output "jwt_secret_name" {
+  description = "Secrets Manager entry holding the key the backend signs access tokens with. create.sh passes the name to the chart and External Secrets copies the value into the cluster; the value is never printed."
+  value       = aws_secretsmanager_secret.jwt_secret.name
+}
+
 output "nat_gateway_public_ip" {
   description = "The single public IP all worker-node egress leaves from now that the nodes are in private subnets. This is the address to allowlist if the cluster calls a third-party API that filters by source IP."
   value       = aws_eip.nat.public_ip

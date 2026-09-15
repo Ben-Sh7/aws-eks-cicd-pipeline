@@ -1,14 +1,21 @@
 node_modules/
-.env
-.env.local
 *.log
 .DS_Store
 dist/
 build/
+coverage/
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Environment files hold real secrets - never commit them. No leading slash, so
+# this applies in every directory: .env, app/backend/.env,
+# app/frontend/.env.local, ... Only the .env.example templates (placeholders,
+# no real values) are tracked.
+.env
+.env.*
+!.env.example
 
 # Helm secret values - real DB credentials for local/demo installs.
 # NEVER commit this; copy values-secret.yaml.example instead.

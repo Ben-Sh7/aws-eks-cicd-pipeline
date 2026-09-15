@@ -52,7 +52,8 @@ resource "aws_iam_role" "external_secrets" {
   tags               = local.common_tags
 }
 
-# Scoped to this one secret's ARN - not SecretsManagerReadWrite, not a wildcard.
+# Scoped to exactly the two secrets the app reads - the RDS master secret and
+# the JWT signing key. Not SecretsManagerReadWrite, not a wildcard.
 data "aws_iam_policy_document" "eso_secrets_access" {
   statement {
     effect = "Allow"
@@ -60,7 +61,10 @@ data "aws_iam_policy_document" "eso_secrets_access" {
       "secretsmanager:GetSecretValue",
       "secretsmanager:DescribeSecret",
     ]
-    resources = [aws_db_instance.postgres.master_user_secret[0].secret_arn]
+    resources = [
+      aws_db_instance.postgres.master_user_secret[0].secret_arn,
+      aws_secretsmanager_secret.jwt_secret.arn,
+    ]
   }
 }
 

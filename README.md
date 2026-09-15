@@ -2,7 +2,7 @@
 
 > Push code. Everything else — build, deploy, secrets, monitoring — happens by itself.
 
-A task manager (React + Node/Express + PostgreSQL) on AWS EKS. GitOps CI/CD, all infrastructure as code.
+A task manager (Next.js + NestJS + PostgreSQL) on AWS EKS. GitOps CI/CD, all infrastructure as code.
 
 ---
 
@@ -21,9 +21,10 @@ See **[HLD.md](HLD.md)** — diagrams, security design, and the reasoning behind
 ```bash
 AWS_PROFILE=<your AWS profile>         # skip if your creds are on [default]
 TF_VAR_github_pat=<your GitHub PAT>    # see "GitHub token" below
-POSTGRES_PASSWORD=<your password>      # local docker-compose only
 # TF_VAR_slack_webhook_url=<url>       # optional — alerts to Slack
 ```
+
+The other entries in `.env.example` are for [local development](#local-development) only.
 
 **2. Using SSO? Log in first.** Otherwise every AWS call fails.
 
@@ -40,16 +41,19 @@ aws sso login --profile <your AWS profile>
 
 That's it. Both scripts read `.env` on their own.
 
+`create.sh` also starts the first Jenkins build, because every run begins with an empty image registry. About 10 minutes after it finishes, the app is live at the `http://…elb.amazonaws.com` address it prints.
+
 ### What's generated for you
 
-You supply four things at most. The rest is created automatically and kept in AWS Secrets Manager.
+You supply two things, three with Slack. The rest is created automatically and kept in AWS Secrets Manager.
 
 | You supply | Created for you |
 |---|---|
 | AWS profile | Grafana admin password |
 | GitHub PAT | Jenkins admin password |
-| Postgres password *(local only)* | Two webhook signing secrets |
-| Slack URL *(optional)* | RDS password — created **and rotated** by AWS |
+| Slack URL *(optional)* | Two webhook signing secrets |
+| | JWT signing key for the app's sessions |
+| | RDS password — created **and rotated** by AWS |
 
 Run `terraform output` to see where each one lives.
 
@@ -83,6 +87,33 @@ You create this one by hand. Jenkins needs it to push, and `create.sh` needs it 
 
 ---
 
+## Signing in
+
+Open the app and **create an account with a username and password**.
+
+- Passwords are stored as **argon2id** hashes — never the password itself
+- A session is a 15-minute access token plus a refresh token that rotates on every use, both in `httpOnly` cookies the page's JavaScript cannot read
+- Reusing an already-rotated refresh token counts as theft and ends every session of that account
+
+> **The deployed app runs over plain HTTP.** Anyone on the network path can read passwords and session cookies. That is an accepted trade-off for a practice project with no real users — it needs a domain and a certificate to fix.
+
+### Google sign-in: local environment only
+
+Google sign-in works when you run the app locally — `npm run dev` or `docker compose` (see [Local development](#local-development)). **It is switched off in the AWS infrastructure**, where the login page shows only the username and password form.
+
+**Why:** Google only redirects back to an **HTTPS** address on a **fixed domain**. The infrastructure serves plain HTTP on the Load Balancer's generated name, and that name changes on every `create.sh`.
+
+**To make it work in the infrastructure, you need a domain for HTTPS requests:**
+
+1. A domain you own, pointed at the ingress Load Balancer through DNS
+2. A TLS certificate for that domain, so the app is served over HTTPS
+3. `https://<your-domain>/api/auth/callback` registered as a redirect URI on the Google OAuth client
+4. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` delivered to the pods through Secrets Manager and External Secrets, like the other secrets
+
+Until then the app needs no Google settings at all: without a client ID, the backend refuses every Google token and the button stays hidden.
+
+---
+
 ## How It Works
 
 ```
@@ -95,18 +126,22 @@ git push → Jenkins builds & scans → ECR → Jenkins commits the tag → Argo
 
 **3. Jenkins writes the new tag to Git.** This is the handoff. Jenkins has no cluster access, so Git is how it tells ArgoCD what to deploy.
 
-**4. ArgoCD deploys.** A second webhook wakes it, and it syncs the chart to EKS.
+**4. ArgoCD deploys.** A second webhook wakes it, and it syncs the chart to EKS. The backend applies any new database migrations as it starts.
 
-**5. Secrets arrive on their own.** External Secrets Operator pulls DB credentials from Secrets Manager into the cluster. No secret ever passes through Git or Jenkins.
+**5. Secrets arrive on their own.** External Secrets Operator pulls the DB credentials and the JWT signing key from Secrets Manager into the cluster. No secret ever passes through Git or Jenkins.
 
 **6. Monitoring runs throughout.** Prometheus, Grafana, and Alertmanager. Set `TF_VAR_slack_webhook_url` and alerts go to Slack.
 
 <details>
-<summary>Details on the webhooks, alert filtering, and Jenkins' self-setup</summary>
+<summary>Details on the webhooks, the first build, alert filtering, and Jenkins' self-setup</summary>
 
 <br>
 
 **The webhooks are managed for you.** `create.sh` re-points them on every run, since the Jenkins IP changes each time.
+
+**The first build starts itself.** ECR is recreated empty on every run, and a push is normally what starts a build — so `create.sh` starts one through the Jenkins API. If that fails, press **Build Now** in Jenkins.
+
+**Jenkins skips its own commits.** A build started by a push whose last commit is the `ci: deploy` bump is skipped, so the pipeline cannot trigger itself forever. A build started by hand or by `create.sh` always runs.
 
 **ArgoCD stays private.** Only its `/api/webhook` path is exposed through the ingress — the UI and API are not. Payloads must be signed with a secret Terraform generates. If the webhook is ever down, ArgoCD's own 180-second poll catches the change anyway.
 
@@ -122,7 +157,7 @@ git push → Jenkins builds & scans → ECR → Jenkins commits the tag → Argo
 
 | | Where | How to get there |
 |---|---|---|
-| **The app** | Public | `kubectl get svc -n ingress-nginx` |
+| **The app** | `http://<elb-hostname>` | Printed by `create.sh`, or `kubectl get svc -n ingress-nginx` |
 | **Jenkins** | `http://<ip>:8080` | Open from your IP — nobody else can reach it |
 | **ArgoCD** | `https://localhost:8081` | `kubectl port-forward -n argocd svc/argocd-server 8081:443` |
 | **Grafana** | `http://localhost:3000` | `kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80` |
@@ -135,11 +170,39 @@ If your IP changes, re-run `create.sh`.
 
 ---
 
+## Local development
+
+**Everything in containers, as it runs in production:**
+
+```bash
+cp .env.example .env          # POSTGRES_PASSWORD and JWT_SECRET; Google is optional
+docker compose up --build     # http://localhost:3000
+```
+
+**Day to day, with hot reload:** start only the database, then each app with its own env file.
+
+```bash
+docker compose up -d postgres-db
+cd app/backend  && cp .env.example .env        && npm install && npm run start:dev   # :3001
+cd app/frontend && cp .env.example .env.local  && npm install && npm run dev         # :3000
+```
+
+**Tests:**
+
+```bash
+cd app/backend && npm test                                  # unit
+cd app/backend && DB_PASSWORD=<postgres password> npm run test:e2e   # against the local Postgres, in its own tasksdb_e2e database
+```
+
+To try Google sign-in locally, create an OAuth client of type *Web application* in Google Cloud Console with `http://localhost:3000/api/auth/callback` as a redirect URI, and put its ID and secret in the env files.
+
+---
+
 ## Tech Stack
 
 | | |
 |---|---|
-| **App** | React · Node/Express · PostgreSQL |
+| **App** | Next.js (React) · NestJS · PostgreSQL · argon2id passwords · JWT sessions |
 | **IaC** | Terraform — VPC, EKS, EC2, ECR, RDS, IAM |
 | **Packaging** | Helm |
 | **CI** | Jenkins + Trivy |
@@ -155,5 +218,6 @@ Postgres runs on **RDS**, in private subnets, reachable only from the cluster.
 - AWS creates and rotates the password. It never touches Terraform state or Git
 - External Secrets Operator pulls it into the cluster
 - The connection uses TLS with certificate verification
+- The schema is created and upgraded by migrations the backend runs on startup — one replica at a time, under a database lock
 
 Nothing to set up by hand.

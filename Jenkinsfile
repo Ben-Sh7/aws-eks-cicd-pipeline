@@ -1,8 +1,8 @@
 // CI only: build, scan with Trivy, push to ECR, bump the image tag in
 // values-images.yaml and push it back. ArgoCD (see
 // gitops/argocd-application.yaml) watches this repo and deploys the app.
-// The guard stage below skips the pipeline when the last commit was made
-// by this same pipeline (jenkins-ci-bot), to avoid a loop.
+// The guard stage below skips a push-triggered build whose last commit was
+// made by this same pipeline (jenkins-ci-bot), to avoid a loop.
 
 pipeline {
     agent any
@@ -43,7 +43,11 @@ pipeline {
             steps {
                 script {
                     def lastAuthor = sh(script: "git log -1 --pretty=%an", returnStdout: true).trim()
-                    env.SKIP_BUILD = (lastAuthor == env.CI_BOT_NAME) ? 'true' : 'false'
+                    // Only a push can loop. A build started by hand or by create.sh
+                    // always runs: ECR is empty after every create, even when the
+                    // last commit is the bot's own tag bump.
+                    def pushTriggered = !currentBuild.getBuildCauses('com.cloudbees.jenkins.GitHubPushCause').isEmpty()
+                    env.SKIP_BUILD = (pushTriggered && lastAuthor == env.CI_BOT_NAME) ? 'true' : 'false'
                     if (env.SKIP_BUILD == 'true') {
                         echo "Last commit was by ${env.CI_BOT_NAME} - skipping to avoid a loop."
                     }
