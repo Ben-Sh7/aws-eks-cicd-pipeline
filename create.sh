@@ -397,10 +397,11 @@ trigger_first_build() {
         return 0
     fi
 
-    # The password reaches curl through a config file on a file descriptor,
-    # never on the command line, where other processes could read it.
+    # The password reaches curl as a config file on stdin, never on the command
+    # line, where other processes could read it. Not <(...): the curl that ships
+    # with Git Bash on Windows cannot open /dev/fd paths.
     jenkins_curl() {
-        curl -s --max-time 30 -K <(printf 'user = "admin:%s"\n' "$password") "$@"
+        printf 'user = "admin:%s"\n' "$password" | curl -s --max-time 30 -K - "$@"
     }
 
     print_step "Waiting for Jenkins to finish its first boot (up to 15 minutes)..."
@@ -410,7 +411,10 @@ trigger_first_build() {
         [ "$status" = "200" ] && break
         sleep 15
     done
-    if [ "$status" != "200" ]; then
+    if [ "$status" = "401" ]; then
+        echo -e "${YELLOW}WARNING: Jenkins rejected the admin password from Secrets Manager (HTTP 401) - start the first build with \"Build Now\" at $jenkins.${NC}"
+        return 0
+    elif [ "$status" != "200" ]; then
         echo -e "${YELLOW}WARNING: Jenkins did not answer within 15 minutes (last HTTP $status) - start the first build with \"Build Now\" at $jenkins.${NC}"
         return 0
     fi

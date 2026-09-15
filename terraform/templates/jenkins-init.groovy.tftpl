@@ -22,12 +22,17 @@ def jenkins = Jenkins.get()
 
 // Jenkins ships with NO authentication once the setup wizard is skipped -
 // without this it would be wide open on the internet (port 8080 is public).
-if (!(jenkins.getSecurityRealm() instanceof HudsonPrivateSecurityRealm)) {
-    def realm = new HudsonPrivateSecurityRealm(false)
-    realm.createAccount('admin', '${jenkins_admin_password}')
+// The password is set on every boot, not only when the realm is missing: apt
+// starts Jenkins once during install, before the wizard is disabled, and that
+// boot already creates "admin" with a random password. createAccount
+// overwrites the password of an existing user.
+def realm = jenkins.getSecurityRealm()
+if (!(realm instanceof HudsonPrivateSecurityRealm) || realm.allowsSignup()) {
+    realm = new HudsonPrivateSecurityRealm(false)
     jenkins.setSecurityRealm(realm)
-    jenkins.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy())
 }
+realm.createAccount('admin', '${jenkins_admin_password}')
+jenkins.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy())
 
 // GitHub PAT credential, used by the Jenkinsfile's GitOps push-back stage.
 def credId = 'github-credentials'
