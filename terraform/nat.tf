@@ -42,3 +42,30 @@ resource "aws_route" "private_nat" {
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.main.id
 }
+
+# ECR serves image layers out of S3, so without this every layer of every ECR
+# pull - the app images and the EKS add-ons alike - is billed as NAT data
+# processing (~$0.045/GB). A gateway endpoint is only a route: no hourly or
+# per-GB charge, and the S3 prefix list is more specific than 0.0.0.0/0, so
+# in-region S3 traffic takes it and everything else still goes to the NAT.
+#
+# The ECR API calls (auth, manifests) stay on the NAT. Moving those takes
+# interface endpoints at ~$7/month each per AZ - more than the NAT they relieve.
+#
+# No restrictive endpoint policy: pinning it to the ECR layer bucket would stop
+# nothing while the NAT reaches the whole internet, and would turn any later
+# in-region S3 use by a pod into a bare AccessDenied.
+#
+# Private route table only. The public subnets leave through the IGW, which has
+# no processing fee, and Jenkins pushes layers through the ECR API, not S3.
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private.id]
+
+  tags = merge(
+    local.common_tags,
+    { Name = "${local.project_name}-s3-endpoint" }
+  )
+}

@@ -23,7 +23,7 @@ Three EC2 instances:
 | **2 × worker nodes** | Private subnets, no public IP | Run the app. ASG 1–3, desired 2 |
 | **1 × Jenkins** | Public subnet | Needs a public IP for GitHub webhooks. No cluster access |
 
-The nodes need internet access to pull images. That goes out through one NAT gateway.
+The nodes need internet access to pull images. That goes out through one NAT gateway. ECR image layers skip it: they come from S3, through a free S3 gateway endpoint.
 
 ![Inside the cluster: browser to ingress to frontend to backend to database, every hop a ClusterIP Service](docs/inside-the-cluster.png)
 
@@ -118,7 +118,7 @@ Three things are silenced on purpose:
 
 | | |
 |---|---|
-| Worker nodes | Private subnets, no public IP. Egress via NAT only |
+| Worker nodes | Private subnets, no public IP. Egress via NAT, except in-region S3 (gateway endpoint) |
 | Jenkins :8080 | Your IP + GitHub's webhook ranges. Nothing else |
 | Jenkins SSH | **None.** Access is through SSM Session Manager |
 | Grafana | ClusterIP. `port-forward` only |
@@ -192,6 +192,7 @@ See `destroy.sh` for the implementation.
 |---|---|
 | RDS is single-AZ | `multi_az = true` when uptime beats cost |
 | One NAT gateway, not one per AZ | ~$32/month instead of ~$64. An AZ outage takes egress for both |
+| S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
 | Alertmanager storage is `emptyDir` | Silences are lost on a pod restart. A ~1Gi PVC fixes it |
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
