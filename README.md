@@ -14,63 +14,114 @@ See **[HLD.md](HLD.md)** — diagrams, security design, and the reasoning behind
 
 ## Quick Start
 
-**You need:** `terraform`, `aws`, `kubectl`, `docker`, `jq`, and AWS credentials.
+**You need:** `terraform`, the `aws` CLI, AWS credentials, and a domain in a Route53 hosted zone. *(Those two tools are all the deployment itself uses. `kubectl` and `helm` are for looking at the cluster afterwards, and for `destroy.sh`.)*
 
-**1. Create `.env`:**
+There is no configuration file to fill in and nothing secret on your machine. Everything this deployment needs to know — the domain, the repository, the GitHub token, the Slack and Google credentials — lives in **AWS Secrets Manager**, created once and read at plan time.
 
-```bash
-AWS_PROFILE=<your AWS profile>         # skip if your creds are on [default]
-TF_VAR_github_pat=<your GitHub PAT>    # see "GitHub token" below
-# TF_VAR_slack_webhook_url=<url>       # optional — alerts to Slack
-```
+### One-time setup
 
-The other entries in `.env.example` are for [local development](#local-development) only.
+Done once per AWS account. None of it is part of the stack — `terraform destroy` touches none of it, so a rebuild never asks you for anything again.
 
-**2. Using SSO? Log in first.** Otherwise every AWS call fails.
+**a. The state bucket.** Terraform's state is the only record of what exists in the account, and it holds generated passwords, so it does not belong on a laptop. This creates an S3 bucket for it with versioning, KMS encryption, no public access and TLS enforced:
 
 ```bash
-aws sso login --profile <your AWS profile>
+cd terraform/bootstrap
+terraform init && terraform apply
+cd ../..
 ```
 
-**3. Go.**
+*(S3 bucket names are globally unique. If that one is taken, change `state_bucket_name` in `terraform/bootstrap/main.tf` and `bucket` in `terraform/backend.tf` to match.)*
+
+**b. The three Secrets Manager entries:**
 
 ```bash
-./create.sh     # ~25 min
-./destroy.sh    # tears it all down
+# 1. Plain configuration. Not secret - just the facts about this deployment.
+aws secretsmanager create-secret --name task-manager/config --secret-string '{
+  "DOMAIN_NAME":     "example.com",
+  "GITHUB_REPO":     "your-user/your-repo",
+  "GITHUB_USERNAME": "your-user"
+}'
+
+# 2. Credentials the cluster consumes. Both keys are optional - each one only
+#    switches its own feature on. See "Signing in" and "Alerting".
+aws secretsmanager create-secret --name task-manager/secrets --secret-string '{
+  "SLACK_WEBHOOK_URL":    "https://hooks.slack.com/services/...",
+  "GOOGLE_CLIENT_ID":     "....apps.googleusercontent.com",
+  "GOOGLE_CLIENT_SECRET": "..."
+}'
+
+# 3. The GitHub token, on its own. See "GitHub token" below.
+aws secretsmanager create-secret --name task-manager/github-token --secret-string 'ghp_...'
 ```
 
-That's it. Both scripts read `.env` on their own.
+Three entries rather than one because three different readers need them, and none of them should be able to read the others': Terraform reads the configuration, the External Secrets operator reads the credentials, and the token is read only into memory during apply and by the Jenkins instance at boot. Storage costs $0.40 per entry per month, plus $1/month for the state bucket's KMS key.
 
-`create.sh` also starts the first Jenkins build, because every run begins with an empty image registry. About 10 minutes after it finishes, the app is live at the `http://…elb.amazonaws.com` address it prints.
+### Every time
+
+```bash
+aws configure            # or: aws sso login --profile <name>
+
+cd terraform
+terraform init
+terraform plan
+terraform apply          # ~25 min
+
+./destroy.sh             # from the project root - tears it all down
+```
+
+That is the whole deployment. One command builds the network, the cluster, the database, CI, CD, monitoring, DNS and the certificate, registers both GitHub webhooks, and starts the first Jenkins build — because the image registry is empty on a fresh build and nothing else would trigger one. About ten minutes later the app is live at `https://app.<your domain>`.
+
+`terraform output` prints every address and the command to look up each password.
+
+> `.env` has nothing to do with any of this. It is for [local development](#local-development) only — `docker compose` on your own machine. The deployment never reads it.
+
+### Rotating what Terraform generates
+
+The JWT signing key and the Jenkins and Grafana admin passwords are generated during apply and written straight to Secrets Manager with **write-only arguments** — Terraform hands them to AWS without recording them in state, which means it cannot show them to you afterwards and neither can anyone reading the state file. AWS is the only place they exist.
+
+To roll all three, increment one number:
+
+```hcl
+# terraform/terraform.tfvars
+generated_secret_version = 2
+```
+
+The app and Grafana pick the new value up from External Secrets within the hour, or immediately on pod restart; Jenkins applies its new password on its next boot. Rotating the JWT key signs everyone out, by design.
+
+The two webhook signing secrets are the exception: Terraform has to hand the *same* value to GitHub and to the receiver, so it must hold them, and they are in state. That is what the encrypted, versioned, access-controlled bucket in step (a) is for — protecting state is the answer here, not pretending it can be emptied.
+
+### The domain
+
+This is the one prerequisite you cannot generate. Terraform needs a **public Route53 hosted zone that already exists and is delegated** — registering a domain through Route53 gives you both; a domain registered elsewhere needs its nameservers pointed at a Route53 zone once, at the registrar.
+
+From that one name Terraform derives every address in the system — `app.`, `argocd.`, `jenkins.` — and issues one ACM certificate covering them. That is what makes a single command enough: nothing has to be discovered after the fact and fed back in, and the app's own address stops changing on every rebuild.
 
 ### What's generated for you
 
-You supply two things, three with Slack. The rest is created automatically and kept in AWS Secrets Manager.
+You create the three entries above. Everything below is generated during apply and kept in Secrets Manager — you never see or choose any of it.
 
-| You supply | Created for you |
+| Generated for you | |
 |---|---|
-| AWS profile | Grafana admin password |
-| GitHub PAT | Jenkins admin password |
-| Slack URL *(optional)* | Two webhook signing secrets |
-| | JWT signing key for the app's sessions |
-| | RDS password — created **and rotated** by AWS |
-
-Run `terraform output` to see where each one lives.
+| TLS certificate | ACM, renewed automatically |
+| Grafana + Jenkins admin passwords | `terraform output` prints the lookup commands |
+| Two webhook signing secrets | GitHub signs each payload; an unsigned POST is dropped |
+| JWT signing key | Signs the app's sessions |
+| RDS password | Created **and rotated** by AWS itself |
 
 ---
 
 ## GitHub token
 
-You create this one by hand. Jenkins needs it to push, and `create.sh` needs it to manage webhooks.
+You create this one by hand. Jenkins needs it to push, and Terraform needs it to manage the repo's webhooks.
 
 1. Go to <https://github.com/settings/tokens> → **Tokens (classic)**
 2. **Generate new token (classic)**
 3. **Expiration:** 30 days. Not "never"
 4. Tick two scopes: **`repo`** and **`admin:repo_hook`**
 5. Copy the `ghp_...` string now — GitHub shows it once
-6. Paste it into `.env`
+6. Put it in Secrets Manager — step 3 of [One-time setup](#one-time-setup)
 
-> `create.sh` checks the token before building anything. A bad token fails in seconds, not 25 minutes in.
+> The token is never a Terraform variable, never in a file, and never in the state file: Terraform reads it into memory during apply to register the webhooks (an `ephemeral` resource, which Terraform is not allowed to persist), and the Jenkins instance reads it at boot with its own IAM role. It is also not in the instance's user-data, which every process on that host can read back through the metadata service.
 
 <details>
 <summary>Why those two scopes, and using a fine-grained token</summary>
@@ -79,9 +130,9 @@ You create this one by hand. Jenkins needs it to push, and `create.sh` needs it 
 
 **`repo`** lets Jenkins clone the repo and push the `ci: deploy X` commit. That commit is how ArgoCD learns which image to run.
 
-**`admin:repo_hook`** lets `create.sh` create and re-point the two webhooks. Without it the API returns 403 and a push triggers nothing.
+**`admin:repo_hook`** lets Terraform create and update the two webhooks. Without it the API returns 403 and the apply fails there.
 
-**Fine-grained tokens** work too. Give it access to this repo with **Contents: Read and write** and **Webhooks: Read and write**. One caveat: they don't report their scopes over the API, so `create.sh` can only confirm the token is valid — not that it has enough permission.
+**Fine-grained tokens** work too. Give it access to this repo with **Contents: Read and write** and **Webhooks: Read and write**.
 
 </details>
 
@@ -95,22 +146,18 @@ Open the app and **create an account with a username and password**.
 - A session is a 15-minute access token plus a refresh token that rotates on every use, both in `httpOnly` cookies the page's JavaScript cannot read
 - Reusing an already-rotated refresh token counts as theft and ends every session of that account
 
-> **The deployed app runs over plain HTTP.** Anyone on the network path can read passwords and session cookies. That is an accepted trade-off for a practice project with no real users — it needs a domain and a certificate to fix.
+> **The deployed app runs over HTTPS.** TLS terminates on the load balancer with an ACM certificate AWS renews on its own, and plain HTTP is redirected. The private key is never issued to anyone, this project included.
 
-### Google sign-in: local environment only
+### Google sign-in
 
-Google sign-in works when you run the app locally — `npm run dev` or `docker compose` (see [Local development](#local-development)). **It is switched off in the AWS infrastructure**, where the login page shows only the username and password form.
+Two steps, both one-time:
 
-**Why:** Google only redirects back to an **HTTPS** address on a **fixed domain**. The infrastructure serves plain HTTP on the Load Balancer's generated name, and that name changes on every `create.sh`.
+1. Register the redirect URI on your Google OAuth client — `terraform output google_redirect_uri` prints it (`https://app.<your domain>/api/auth/callback`)
+2. Put `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in the credentials entry — `terraform output credentials_secret` prints the command and the JSON shape
 
-**To make it work in the infrastructure, you need a domain for HTTPS requests:**
+The External Secrets operator copies them into the cluster from there, and the sign-in button appears. The values never pass through Terraform, the state file, or any file on your machine.
 
-1. A domain you own, pointed at the ingress Load Balancer through DNS
-2. A TLS certificate for that domain, so the app is served over HTTPS
-3. `https://<your-domain>/api/auth/callback` registered as a redirect URI on the Google OAuth client
-4. `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` delivered to the pods through Secrets Manager and External Secrets, like the other secrets
-
-Until then the app needs no Google settings at all: without a client ID, the backend refuses every Google token and the button stays hidden.
+Leave the keys out and the app runs with username + password accounts only: the backend refuses every Google token and the button stays hidden.
 
 ---
 
@@ -130,24 +177,24 @@ git push → Jenkins builds & scans → ECR → Jenkins commits the tag → Argo
 
 **5. Secrets arrive on their own.** External Secrets Operator pulls the DB credentials and the JWT signing key from Secrets Manager into the cluster. No secret ever passes through Git or Jenkins.
 
-**6. Monitoring runs throughout.** Prometheus, Grafana, and Alertmanager. Set `TF_VAR_slack_webhook_url` and alerts go to Slack.
+**6. Monitoring runs throughout.** Prometheus, Grafana, and Alertmanager. Put `SLACK_WEBHOOK_URL` in the credentials entry and warning + critical alerts go to Slack — Alertmanager reads it from a file the operator writes, so the URL never appears in a Helm value or in Terraform state.
 
 <details>
 <summary>Details on the webhooks, the first build, alert filtering, and Jenkins' self-setup</summary>
 
 <br>
 
-**The webhooks are managed for you.** `create.sh` re-points them on every run, since the Jenkins IP changes each time.
+**The webhooks are Terraform resources.** Both are declared in `terraform/github.tf`, so an apply creates or corrects them, a destroy removes them, and a plan shows it if somebody edits one in the GitHub UI. They point at DNS names, not at IP addresses, so replacing the Jenkins instance does not invalidate them.
 
-**The first build starts itself.** ECR is recreated empty on every run, and a push is normally what starts a build — so `create.sh` starts one through the Jenkins API. If that fails, press **Build Now** in Jenkins.
+**The first build starts itself.** ECR is recreated empty on every build, and a push is normally what starts a job — so the Groovy script that creates the job also queues its first run. If it ever fails, press **Build Now** in Jenkins.
 
-**Jenkins skips its own commits.** A build started by a push whose last commit is the `ci: deploy` bump is skipped, so the pipeline cannot trigger itself forever. A build started by hand or by `create.sh` always runs.
+**Jenkins skips its own commits.** A build started by a push whose last commit is the `ci: deploy` bump is skipped, so the pipeline cannot trigger itself forever. A build started any other way always runs.
 
 **ArgoCD stays private.** Only its `/api/webhook` path is exposed through the ingress — the UI and API are not. Payloads must be signed with a secret Terraform generates. If the webhook is ever down, ArgoCD's own 180-second poll catches the change anyway.
 
 **Alert noise is filtered.** `Watchdog` and `InfoInhibitor` are dropped. So are the chart's scheduler, controller-manager and etcd rules — EKS runs those on AWS's side where nothing can scrape them, so they'd report "down" forever.
 
-**Jenkins configures itself.** No setup wizard. `terraform apply` runs a `user_data` script that installs Jenkins and Docker, plus a Groovy script that creates the admin login, the GitHub credential, and the pipeline job on first boot.
+**Jenkins configures itself.** No setup wizard. `terraform apply` runs a `user_data` script that installs Jenkins and Docker, plus a Groovy script that creates the admin login, the GitHub credential, and the pipeline job on first boot. The three secrets it needs are pulled from Secrets Manager at boot with the instance's own IAM role — user-data itself carries no secret, because anything in it can be read back from the metadata service by every process on the host.
 
 </details>
 
@@ -157,44 +204,29 @@ git push → Jenkins builds & scans → ECR → Jenkins commits the tag → Argo
 
 | | Where | How to get there |
 |---|---|---|
-| **The app** | `http://<elb-hostname>` | Printed by `create.sh`, or `kubectl get svc -n ingress-nginx` |
-| **Jenkins** | `http://<ip>:8080` | Open from your IP — nobody else can reach it |
+| **The app** | `https://app.<domain>` | `terraform output app_url` |
+| **Jenkins** | `http://jenkins.<domain>:8080` | Open from your IP — nobody else can reach it |
 | **ArgoCD** | `https://localhost:8081` | `kubectl port-forward -n argocd svc/argocd-server 8081:443` |
 | **Grafana** | `http://localhost:3000` | `kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80` |
 
-`create.sh` prints these at the end, with the password lookups.
+`terraform output` prints all of these, with the command that reads each password.
 
 **Jenkins firewall:** port 8080 opens to your IP and GitHub's webhook ranges. Nothing else. There is no SSH — the box is reached through SSM Session Manager.
 
-If your IP changes, re-run `create.sh`.
+If your IP changes, re-run `terraform apply`: it looks your address up again and corrects the rule.
 
 ---
 
-## Local development
+## Working on the code
 
-**Everything in containers, as it runs in production:**
-
-```bash
-cp .env.example .env          # POSTGRES_PASSWORD and JWT_SECRET; Google is optional
-docker compose up --build     # http://localhost:3000
-```
-
-**Day to day, with hot reload:** start only the database, then each app with its own env file.
+**Tests** need nothing but a local Postgres:
 
 ```bash
-docker compose up -d postgres-db
-cd app/backend  && cp .env.example .env        && npm install && npm run start:dev   # :3001
-cd app/frontend && cp .env.example .env.local  && npm install && npm run dev         # :3000
+cd app/backend && npm test                                           # unit
+cd app/backend && DB_PASSWORD=<postgres password> npm run test:e2e   # its own tasksdb_e2e database
 ```
 
-**Tests:**
-
-```bash
-cd app/backend && npm test                                  # unit
-cd app/backend && DB_PASSWORD=<postgres password> npm run test:e2e   # against the local Postgres, in its own tasksdb_e2e database
-```
-
-To try Google sign-in locally, create an OAuth client of type *Web application* in Google Cloud Console with `http://localhost:3000/api/auth/callback` as a redirect URI, and put its ID and secret in the env files.
+Running the whole stack on your own machine is a convenience, not part of the deployment, so it lives outside the repository — a `local/` directory with a `docker-compose.yml` and env templates, ignored by git. Nothing in `terraform/` or `gitops/` reads any of it, and the deployed system takes every value it needs from AWS Secrets Manager.
 
 ---
 

@@ -40,6 +40,23 @@ spec:
             configMapKeyRef:
               name: app-config
               key: APP_URL
+        # Google sign-in. optional: true on purpose - the key is absent in
+        # local mode and on a deployment where Google was never configured, and
+        # a missing key here would otherwise keep the pod from starting at all.
+        # The frontend runs the OAuth exchange, so it needs both halves; the
+        # backend only verifies the resulting token and takes the id alone.
+        - name: GOOGLE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: app-secret
+              key: GOOGLE_CLIENT_ID
+              optional: true
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: app-secret
+              key: GOOGLE_CLIENT_SECRET
+              optional: true
         # Set here as well as in the Dockerfile: the container runtime sets
         # HOSTNAME to the pod name, and Next.js would then listen only on the
         # address that name resolves to instead of on every interface.

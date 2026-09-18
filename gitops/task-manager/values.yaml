@@ -1,9 +1,9 @@
 # Image tags are overridden by values-images.yaml (bumped by Jenkins CI).
 # The image repositories are empty on purpose, for the same reason as
 # config.dbHost below: the ECR registry URL contains the AWS account id, which
-# differs per deployment, so create.sh passes both in as ArgoCD helm parameters
-# straight from the terraform ECR outputs. Hardcoding one account here means
-# every other account gets ImagePullBackOff.
+# differs per deployment, so Terraform passes both to ArgoCD as helm parameters
+# on the Application it creates (terraform/helm-addons.tf). Hardcoding one
+# account here means every other account gets ImagePullBackOff.
 
 backend:
   image:
@@ -36,20 +36,16 @@ frontend:
       memory: 512Mi
 
 # Non-sensitive shared configuration (rendered into the app-config ConfigMap).
-# dbHost and appUrl are empty on purpose: the RDS endpoint and the ingress
-# LoadBalancer's address only exist after terraform apply, so create.sh passes
-# them in as ArgoCD helm parameters.
-#
-# Google sign-in is deliberately not configured here: Google requires HTTPS
-# and a fixed domain for its redirect URI, which this deployment does not
-# have. Without GOOGLE_CLIENT_ID the app runs with username + password only.
+# dbHost and appUrl are empty on purpose: the RDS endpoint is generated per
+# deployment and the app's address comes from the domain Terraform was given,
+# so both arrive as ArgoCD helm parameters.
 config:
   dbHost: ""
   dbPort: "5432"
   dbName: tasksdb
   backendUrl: http://backend-service:3001
   backendPort: "3001"
-  # The exact address users open, e.g. http://<elb-hostname>. The frontend
+  # The exact address users open, e.g. https://app.example.com. The frontend
   # accepts sign-ins and form submissions only from this origin (CSRF
   # protection), so the chart refuses to render without it.
   appUrl: ""
@@ -58,18 +54,24 @@ config:
   # which only makes sense against a local Postgres.
   dbSslCa: /app/rds-ca.pem
 
-# mode: externalSecrets (default) - pulls the RDS master credentials and the
-#   JWT signing key from AWS Secrets Manager via the External Secrets
-#   Operator. No real credentials here. awsSecretName and jwtSecretName are
-#   empty for the same reason as dbHost: AWS generates the names, so create.sh
-#   passes them in.
+# mode: externalSecrets (default) - pulls the RDS master credentials, the JWT
+#   signing key and the Google OAuth client from AWS Secrets Manager via the
+#   External Secrets Operator. No real credentials here. The three *SecretName
+#   values are empty for the same reason as dbHost: AWS generates the names, so
+#   Terraform passes them in.
 # mode: local - renders a plain Secret from dbUser/dbPassword/jwtSecret below,
-#   for local/demo use only (via a gitignored values-secret.yaml).
+#   for a local or demo install only (minikube, kind). The values for it live
+#   outside the repository, in the gitignored local/ directory - see
+#   local/values-secret.yaml.example.
 secrets:
   mode: externalSecrets
   awsRegion: us-east-1
   awsSecretName: ""
   jwtSecretName: ""
+  # Holds GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET as one JSON document.
+  # Empty switches Google sign-in off entirely - the app then offers username +
+  # password accounts only, and nothing in the chart references the credential.
+  googleSecretName: ""
   refreshInterval: 1h
   dbUser: ""
   dbPassword: ""
@@ -78,5 +80,10 @@ secrets:
 ingress:
   enabled: true
   className: nginx
-  # Empty host = match-all path rule (no hostname restriction).
+  # The hostname the app answers on, passed in by Terraform. Empty = match-all
+  # path rule (no hostname restriction), which is what a local minikube install
+  # wants.
   host: ""
+  # Send plain HTTP to HTTPS. Only makes sense where a certificate exists -
+  # turn it off for local installs, which have none.
+  forceSslRedirect: true

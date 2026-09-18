@@ -24,26 +24,51 @@ terraform {
       source  = "hashicorp/http"
       version = "~> 3.4"
     }
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.2"
+    }
   }
 }
 
 provider "aws" {
   region = var.aws_region
+  # null rather than "", so an unset variable means "use the normal credential
+  # chain" instead of "use a profile literally named empty string".
+  profile = var.aws_profile != "" ? var.aws_profile : null
 }
 
-data "aws_caller_identity" "current" {}
+# Manages this repo's push webhooks (github.tf).
+#
+# The token is read straight out of Secrets Manager into this provider's
+# configuration (external-config.tf) and is never stored: provider
+# configuration is not part of state, and the ephemeral resource it comes from
+# is not either. It is not a Terraform variable, so it cannot be left in a
+# tfvars file or a shell history.
+provider "github" {
+  token = ephemeral.aws_secretsmanager_secret_version.github_token.secret_string
+  owner = local.github_owner
+}
 
 # Kubernetes/Helm provider auth. The token is fetched through the exec plugin
 # rather than data.aws_eks_cluster_auth: that data source is resolved once per
 # plan and stored in state, so on the next run Terraform configures the provider
 # with a token minted hours earlier - EKS tokens live 15 minutes, and the
 # refresh then fails with a bare "Unauthorized". exec mints one per call.
-# The aws CLI this needs is already a hard prerequisite of create.sh.
+#
+# The aws CLI is the one tool this configuration needs on the machine running
+# it, and --profile is passed explicitly: the CLI resolves credentials on its
+# own, so without it a profile set in terraform.tfvars would apply to the AWS
+# provider and not to these two, and the cluster calls would quietly
+# authenticate as somebody else.
 locals {
   eks_exec = {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.main.name, "--region", var.aws_region]
+    args = concat(
+      ["eks", "get-token", "--cluster-name", aws_eks_cluster.main.name, "--region", var.aws_region],
+      var.aws_profile != "" ? ["--profile", var.aws_profile] : []
+    )
   }
 }
 
@@ -234,6 +259,30 @@ locals {
   ]
 }
 
+# The public IP this apply is running from, so the Jenkins UI can be reached by
+# the person who built it and by nobody else. This used to be looked up by the
+# wrapper script and exported as TF_VAR_jenkins_ui_allowed_cidrs; doing it here
+# keeps the rule correct without a script, and setting the variable explicitly
+# still wins (a fixed office range, say).
+#
+# Same timeout reasoning as github_meta above: without one, an endpoint that
+# accepts the connection and never answers hangs the plan forever.
+data "http" "my_ip" {
+  count = length(var.jenkins_ui_allowed_cidrs) == 0 ? 1 : 0
+
+  url                = "https://checkip.amazonaws.com"
+  request_timeout_ms = 10000
+
+  retry {
+    attempts     = 2
+    min_delay_ms = 1000
+  }
+}
+
+locals {
+  jenkins_ui_cidrs = length(var.jenkins_ui_allowed_cidrs) > 0 ? var.jenkins_ui_allowed_cidrs : ["${trimspace(data.http.my_ip[0].response_body)}/32"]
+}
+
 resource "aws_security_group" "jenkins" {
   name_prefix = "${local.project_name}-jenkins-"
   description = "Security group for Jenkins EC2 instance"
@@ -250,17 +299,15 @@ resource "aws_security_group" "jenkins" {
     cidr_blocks = local.github_hook_cidrs
   }
 
-  # Human access to the Jenkins UI. create.sh fills this with the public IP it
-  # is running from; empty means nobody but GitHub can reach 8080.
-  dynamic "ingress" {
-    for_each = length(var.jenkins_ui_allowed_cidrs) > 0 ? [1] : []
-    content {
-      description = "Jenkins web UI, operator access only"
-      from_port   = 8080
-      to_port     = 8080
-      protocol    = "tcp"
-      cidr_blocks = var.jenkins_ui_allowed_cidrs
-    }
+  # Human access to the Jenkins UI: the operator's own address only - either the
+  # CIDRs set in jenkins_ui_allowed_cidrs, or the public IP this apply runs
+  # from. Never 0.0.0.0/0; GitHub reaches 8080 through the rule above instead.
+  ingress {
+    description = "Jenkins web UI, operator access only"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = local.jenkins_ui_cidrs
   }
 
   # No SSH rule on purpose. The instance is reached through SSM Session Manager
@@ -448,7 +495,22 @@ resource "aws_instance" "jenkins" {
 
   user_data = templatefile("${path.module}/templates/jenkins-user-data.sh.tftpl", {
     groovy_script = local.jenkins_groovy_script
+    aws_region    = var.aws_region
+    secrets_dir   = local.jenkins_secrets_dir
+
+    # Identifiers, not values. Nothing secret is rendered into user-data.
+    github_token_secret_id    = data.aws_secretsmanager_secret.github_token.arn
+    jenkins_admin_secret_id   = aws_secretsmanager_secret.jenkins_admin.arn
+    jenkins_webhook_secret_id = aws_secretsmanager_secret.jenkins_webhook.arn
   })
+
+  # The instance reads all three at boot, so they have to hold their real values
+  # and the role has to be allowed to read them before it starts.
+  depends_on = [
+    aws_iam_role_policy.jenkins_bootstrap_secrets,
+    aws_secretsmanager_secret_version.jenkins_admin,
+    aws_secretsmanager_secret_version.jenkins_webhook,
+  ]
 
   tags = merge(
     local.common_tags,

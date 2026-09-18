@@ -43,9 +43,10 @@ pipeline {
             steps {
                 script {
                     def lastAuthor = sh(script: "git log -1 --pretty=%an", returnStdout: true).trim()
-                    // Only a push can loop. A build started by hand or by create.sh
-                    // always runs: ECR is empty after every create, even when the
-                    // last commit is the bot's own tag bump.
+                    // Only a push can loop. A build started by hand, or queued by
+                    // Jenkins' own bootstrap on a fresh instance, always runs: ECR
+                    // is empty after every rebuild, even when the last commit is
+                    // the bot's own tag bump.
                     def pushTriggered = !currentBuild.getBuildCauses('com.cloudbees.jenkins.GitHubPushCause').isEmpty()
                     env.SKIP_BUILD = (pushTriggered && lastAuthor == env.CI_BOT_NAME) ? 'true' : 'false'
                     if (env.SKIP_BUILD == 'true') {

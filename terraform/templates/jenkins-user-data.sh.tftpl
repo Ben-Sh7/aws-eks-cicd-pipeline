@@ -68,6 +68,38 @@ java -jar /tmp/jenkins-plugin-manager.jar \
   --plugin-download-directory /var/lib/jenkins/plugins \
   --plugins git github workflow-aggregator credentials-binding
 
+# The three values the bootstrap script needs, fetched here with the instance's
+# own IAM role instead of being written into this file. user-data is not a
+# secure channel: every process on the host can read it back from
+# http://169.254.169.254/latest/user-data, and it is shown in plain text in the
+# EC2 console to anyone with DescribeInstanceAttribute.
+#
+# The retry is for IAM, not for the network: a role policy attached moments
+# before the instance booted can take a few seconds to be usable, and a boot
+# that fails on AccessDenied leaves a Jenkins with no admin password at all.
+mkdir -p ${secrets_dir}
+chmod 700 ${secrets_dir}
+
+fetch_secret() {
+  local secret_id="$1"
+  local dest="$2"
+  local i out
+  for i in $(seq 1 12); do
+    if out=$(aws secretsmanager get-secret-value --region ${aws_region}                --secret-id "$secret_id" --query SecretString --output text 2>/dev/null); then
+      printf '%s' "$out" > "$dest"
+      chmod 400 "$dest"
+      return 0
+    fi
+    sleep 10
+  done
+  echo "Could not read $secret_id from Secrets Manager after 2 minutes - refusing to continue"
+  exit 1
+}
+
+fetch_secret "${github_token_secret_id}" "${secrets_dir}/github-pat"
+fetch_secret "${jenkins_admin_secret_id}" "${secrets_dir}/admin-password"
+fetch_secret "${jenkins_webhook_secret_id}" "${secrets_dir}/webhook-secret"
+
 # Bootstrap script: admin account, GitHub credential, and the Pipeline job.
 mkdir -p /var/lib/jenkins/init.groovy.d
 cat > /var/lib/jenkins/init.groovy.d/bootstrap.groovy << 'GROOVY_EOF'

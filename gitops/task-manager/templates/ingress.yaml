@@ -8,6 +8,14 @@ metadata:
     {{- include "task-manager.labels" . | nindent 4 }}
   annotations:
     kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    {{- if .Values.ingress.forceSslRedirect }}
+    # TLS is terminated on the load balancer, so nginx only ever sees plain
+    # HTTP and cannot infer this from the connection - it reads
+    # X-Forwarded-Proto instead (the controller is configured with
+    # use-forwarded-headers for exactly this). Without the annotation the site
+    # would answer on http:// as happily as on https://.
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:

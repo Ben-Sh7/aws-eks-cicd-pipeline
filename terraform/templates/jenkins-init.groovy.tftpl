@@ -20,6 +20,15 @@ import hudson.util.Secret
 
 def jenkins = Jenkins.get()
 
+// The values below are NOT rendered into this script. user-data pulls them
+// from AWS Secrets Manager at boot with the instance's own IAM role and drops
+// them here, readable by the jenkins user only - so nothing secret is in the
+// instance's user-data, which any process on the host can read from the
+// metadata service. Read lazily: a value is only touched by the block that
+// needs it.
+def secretsDir = '${secrets_dir}'
+def readSecret = { String name -> new File(secretsDir, name).text.trim() }
+
 // Jenkins ships with NO authentication once the setup wizard is skipped -
 // without this it would be wide open on the internet (port 8080 is public).
 // The password is set on every boot, not only when the realm is missing: apt
@@ -31,7 +40,7 @@ if (!(realm instanceof HudsonPrivateSecurityRealm) || realm.allowsSignup()) {
     realm = new HudsonPrivateSecurityRealm(false)
     jenkins.setSecurityRealm(realm)
 }
-realm.createAccount('admin', '${jenkins_admin_password}')
+realm.createAccount('admin', readSecret('admin-password'))
 jenkins.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy())
 
 // GitHub PAT credential, used by the Jenkinsfile's GitOps push-back stage.
@@ -43,7 +52,7 @@ def existingCred = CredentialsProvider.lookupCredentials(
 if (!existingCred) {
     def cred = new UsernamePasswordCredentialsImpl(
         CredentialsScope.GLOBAL, credId, 'GitHub PAT for CI GitOps push-back',
-        '${github_username}', '${github_pat}'
+        '${github_username}', readSecret('github-pat')
     )
     SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), cred)
 }
@@ -61,7 +70,7 @@ if (!existingHookSecret) {
     def hookCred = new StringCredentialsImpl(
         CredentialsScope.GLOBAL, hookSecretId,
         'Shared secret GitHub signs webhook payloads with',
-        Secret.fromString('${jenkins_webhook_secret}')
+        Secret.fromString(readSecret('webhook-secret'))
     )
     SystemCredentialsProvider.getInstance().getStore().addCredentials(Domain.global(), hookCred)
 }
@@ -87,6 +96,13 @@ if (jenkins.getItem(jobName) == null) {
     trigger.start(job, true)
 
     job.save()
+
+    // Every rebuild starts with an empty ECR, and a job only builds on a push -
+    // so without this the pods would sit in ImagePullBackOff until someone
+    // committed something. Queued with a quiet period so it starts after
+    // Jenkins has finished coming up, not during it. Only ever runs on the boot
+    // that creates the job.
+    job.scheduleBuild2(60)
 }
 
 jenkins.save()

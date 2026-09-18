@@ -11,7 +11,7 @@ data:
   DB_NAME: {{ .Values.config.dbName | quote }}
   BACKEND_URL: {{ .Values.config.backendUrl | quote }}
   PORT: {{ .Values.config.backendPort | quote }}
-  APP_URL: {{ required "config.appUrl is required: the exact address users open, e.g. http://<elb-hostname> (create.sh passes it)" .Values.config.appUrl | quote }}
+  APP_URL: {{ required "config.appUrl is required: the exact address users open, e.g. https://app.example.com (Terraform passes it as an ArgoCD helm parameter)" .Values.config.appUrl | quote }}
   {{- if .Values.config.dbSslCa }}
   DB_SSL_CA: {{ .Values.config.dbSslCa | quote }}
   {{- end }}

@@ -17,27 +17,37 @@ coverage/
 .env.*
 !.env.example
 
+# Everything needed to run the stack on this machine - docker-compose, the env
+# templates, the Helm values for a local install. It is deliberately not part of
+# the repository: the project deploys to AWS, and a local run is a convenience
+# for whoever is working on the code, not something the deployment depends on.
+#
+# A directory excluded here cannot be re-included by a later rule, so nothing
+# inside it can be committed by accident - including the real .env it holds.
+/local/
+
 # Helm secret values - real DB credentials for local/demo installs.
-# NEVER commit this; copy values-secret.yaml.example instead.
 gitops/task-manager/values-secret.yaml
 
-# Terraform state and local artifacts - MUST NEVER be committed.
-# State can contain sensitive resource attributes (and Terraform itself
-# warns against committing it). The provider lock file is safe/recommended
-# to commit (only hashes, no secrets) and is NOT excluded by these patterns.
-terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/*.tfplan
-terraform/tfplan
-terraform/destroy.tfplan
-terraform/crash*.log
+# Terraform local artifacts - MUST NEVER be committed.
+# Unanchored (no leading path), so they also cover terraform/bootstrap/ and any
+# future subdirectory. The main configuration keeps its state in S3 now; what
+# these still catch is the bootstrap configuration's own local state - which
+# holds only the state bucket and its KMS key, no secrets - plus plan files,
+# which DO contain everything a state file does. The provider lock file is safe
+# and recommended to commit (only hashes) and is not excluded here.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash*.log
 
-# terraform.tfvars may hold the GitHub PAT or other sensitive overrides -
-# never commit; only the .tfvars.example template is tracked.
-terraform/*.tfvars
-terraform/*.tfvars.json
-!terraform/*.tfvars.example
+# terraform.tfvars is optional and holds non-secret overrides only, but it is
+# still local to one machine; only the .tfvars.example template is tracked.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
 
 # Local working notes - handover prompts, scratch plans. Not part of the project.
 # Note the trailing /*: an ignored *directory* is never descended into, so a

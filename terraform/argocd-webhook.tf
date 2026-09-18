@@ -50,6 +50,12 @@ resource "kubernetes_ingress_v1" "argocd_webhook" {
     ingress_class_name = "nginx"
 
     rule {
+      # Its own hostname, so the app's routes and ArgoCD's one published path
+      # are not competing for the same URL space. Together with pathType Exact
+      # this means exactly one URL on the internet reaches ArgoCD:
+      # https://argocd.<domain>/api/webhook
+      host = local.argocd_fqdn
+
       http {
         path {
           path      = "/api/webhook"

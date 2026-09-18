@@ -2,22 +2,24 @@
 # Tears down everything: ArgoCD app -> ingress-nginx LB -> monitoring PVCs
 # -> terraform destroy -> verify_cleanup. Order matters: each step releases
 # resources the next step's deletion depends on being gone.
+#
+# There is no matching create script: `terraform apply` builds the whole system
+# on its own. This one exists because teardown is the asymmetric half - the load
+# balancer and the EBS volumes are created by Kubernetes, not by Terraform, so
+# nothing in the state file knows to remove them first, and a plain `terraform
+# destroy` can stall on a VPC that still has a load balancer in it or leave
+# volumes behind that are billed by the hour.
 
 set -e
 
 PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 TERRAFORM_DIR="$PROJECT_DIR/terraform"
-ARGOCD_APP="$PROJECT_DIR/gitops/argocd-application.yaml"
 AWS_REGION="us-east-1"
 PROJECT_TAG="task-manager"
 
-# Load secrets from .env if present (gitignored - see .env.example for what's needed).
-# terraform destroy needs it too: github_pat has no default.
-if [ -f "$PROJECT_DIR/.env" ]; then
-    set -a
-    source "$PROJECT_DIR/.env"
-    set +a
-fi
+# No environment to load. Terraform reads the domain, the repository and the
+# GitHub token from AWS Secrets Manager (terraform/external-config.tf), so a
+# teardown needs nothing but AWS credentials.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -142,7 +144,7 @@ delete_app_release() {
 
     if kubectl get application -n argocd task-manager &> /dev/null; then
         print_step "Deleting the task-manager ArgoCD Application (cascading)..."
-        kubectl delete -f "$ARGOCD_APP" --wait=true --timeout=120s
+        kubectl delete application -n argocd task-manager --wait=true --timeout=120s
         print_success "Application object deleted"
     else
         print_warning "No task-manager ArgoCD Application found - skipping (already removed, or never registered?)"
@@ -209,12 +211,6 @@ delete_infrastructure() {
     cd "$PROJECT_DIR"
 }
 
-# The Jenkins EC2's public IP returns to AWS's pool and gets handed to another
-# customer; the load balancer hostname stops resolving. A webhook left pointing
-# at either keeps delivering this repo's push payloads - commit messages, author
-# names and email addresses - to whoever holds that address next. Only the two
-# hooks this project creates are touched; anything else on the repo is left
-# alone.
 # delete_monitoring_pvcs waits for the PVC objects to disappear and treats that
 # as the volumes being gone, but PV deletion is asynchronous: the CSI driver
 # only then calls DeleteVolume against AWS. terraform destroy tears that driver
@@ -241,53 +237,6 @@ delete_orphaned_volumes() {
             print_success "Deleted orphaned volume $v"
         else
             print_warning "Could not delete $v - remove it by hand, it is billed hourly."
-        fi
-    done
-}
-
-delete_github_webhooks() {
-    print_header "REMOVING GITHUB WEBHOOKS"
-
-    if [ -z "$TF_VAR_github_pat" ]; then
-        print_warning "TF_VAR_github_pat is not set - the webhooks are still in place."
-        print_warning "Delete them under Settings -> Webhooks; they now point at addresses you no longer own."
-        return 0
-    fi
-
-    if ! command -v jq &> /dev/null; then
-        print_warning "jq is not installed - cannot read the webhook list, leaving them in place."
-        return 0
-    fi
-
-    local repo
-    repo=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null         | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##' || true)
-
-    if [ -z "$repo" ]; then
-        print_warning "Could not determine the GitHub repo from the git remote - skipping."
-        return 0
-    fi
-
-    local api="https://api.github.com/repos/${repo}/hooks"
-    local ids
-    # tr -d '\015': jq.exe on Windows emits CRLF, and a trailing carriage return
-    # in the id produces a malformed URL that curl rejects with exit 3 - which
-    # under set -e killed this function silently, before verify_cleanup ran.
-    ids=$(curl -s -H "Authorization: token $TF_VAR_github_pat" "$api"         | jq -r '.[] | select(.config.url // "" | test("github-webhook|/api/webhook")) | .id' 2>/dev/null         | tr -d '\015' || true)
-
-    if [ -z "$ids" ]; then
-        print_success "No project webhooks left on $repo"
-        return 0
-    fi
-
-    local id status
-    for id in $ids; do
-        # || echo "000": a curl that cannot even build the request exits non-zero,
-        # and an unguarded assignment under set -e aborts the whole teardown.
-        status=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE             -H "Authorization: token $TF_VAR_github_pat" "$api/$id" || true)
-        if [ "$status" = "204" ]; then
-            print_success "Deleted webhook $id"
-        else
-            print_warning "Could not delete webhook $id (HTTP $status) - remove it by hand."
         fi
     done
 }
@@ -506,7 +455,6 @@ main() {
     delete_monitoring_pvcs
     delete_infrastructure
     delete_orphaned_volumes
-    delete_github_webhooks
     verify_cleanup
     show_cost_summary
 

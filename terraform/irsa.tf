@@ -52,8 +52,14 @@ resource "aws_iam_role" "external_secrets" {
   tags               = local.common_tags
 }
 
-# Scoped to exactly the two secrets the app reads - the RDS master secret and
-# the JWT signing key. Not SecretsManagerReadWrite, not a wildcard.
+# Scoped to exactly the entries that are pulled into the cluster: the RDS master
+# secret, the JWT key and the Grafana admin login that Terraform generates, and
+# the one entry you maintain by hand, which carries the Slack URL and the Google
+# client.
+#
+# The GitHub token lives in a separate entry that this role cannot read - which
+# is the reason it is separate. A compromise of the operator would otherwise
+# hand over push access to the repository along with everything else.
 data "aws_iam_policy_document" "eso_secrets_access" {
   statement {
     effect = "Allow"
@@ -64,6 +70,8 @@ data "aws_iam_policy_document" "eso_secrets_access" {
     resources = [
       aws_db_instance.postgres.master_user_secret[0].secret_arn,
       aws_secretsmanager_secret.jwt_secret.arn,
+      aws_secretsmanager_secret.grafana_admin.arn,
+      data.aws_secretsmanager_secret.app.arn,
     ]
   }
 }

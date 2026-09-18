@@ -160,40 +160,58 @@ variable "grafana_storage_size" {
   default     = "5Gi"
 }
 
-variable "github_repo" {
-  description = "GitHub repo this project lives in, as owner/repo"
-  type        = string
-  default     = "Ben-Sh7/aws-eks-cicd-pipeline"
-}
-
-variable "github_username" {
-  description = "GitHub username associated with github_pat"
-  type        = string
-  default     = "Ben-Sh7"
-}
-
 variable "jenkins_ui_allowed_cidrs" {
-  description = "CIDRs allowed to reach the Jenkins UI on 8080. create.sh sets this to the public IP it runs from; GitHub's webhook ranges are allowed separately and do not belong here. Empty means the UI is unreachable, which is the safe default rather than 0.0.0.0/0."
+  description = "CIDRs allowed to reach the Jenkins UI on 8080. Left empty, Terraform allows exactly the public IP it is running from (looked up at plan time, see data.http.my_ip in main.tf) - never 0.0.0.0/0. GitHub's webhook ranges are allowed separately and do not belong here."
   type        = list(string)
   default     = []
 }
 
-variable "slack_webhook_url" {
-  description = "Slack Incoming Webhook URL for Alertmanager. Empty (the default) leaves Alertmanager on the chart default - a null receiver - so the project still comes up with one command and no Slack account. Set it in .env as TF_VAR_slack_webhook_url to route alerts to Slack. It lives only in .env (gitignored) and local state."
-  type        = string
-  default     = ""
-  sensitive   = true
+variable "enable_slack_alerts" {
+  description = "Whether Alertmanager routes warning/critical alerts to Slack. The URL itself never passes through Terraform: External Secrets reads SLACK_WEBHOOK_URL out of the credentials entry you maintain by hand and Alertmanager reads it from a mounted file. false leaves Alertmanager on the chart default (a null receiver)."
+  type        = bool
+  default     = true
 }
 
 variable "slack_channel" {
-  description = "Channel Alertmanager posts to. Only used when slack_webhook_url is set; the webhook already targets a channel, this just overrides it."
+  description = "Channel Alertmanager posts to. Only used when enable_slack_alerts is true; the webhook URL already targets a channel, this just overrides it."
   type        = string
   default     = "#alerts"
 }
 
-variable "github_pat" {
-  description = "GitHub Personal Access Token (repo + admin:repo_hook scopes). Required, no default - bootstraps the Jenkins job/credential and lets create.sh manage the GitHub webhook."
+# ---------------------------------------------------------------------------
+# DNS. The domain itself is not here - it is read from the configuration secret
+# (external-config.tf), like the repository and the GitHub token, so that
+# nothing about this deployment has to be written down on the machine running
+# it. What is left are the labels in front of it.
+#
+# The domain is what makes a single `terraform apply` enough: every address the
+# system needs to know about itself - the app's own URL, the webhook targets -
+# is derived from it and is therefore known before apply, instead of being
+# discovered afterwards from the load balancer AWS happened to hand out. It is
+# also what HTTPS and Google sign-in require.
+# ---------------------------------------------------------------------------
+
+variable "app_subdomain" {
+  description = "Subdomain the app is served on. This is the address users open and the only origin the frontend accepts sign-ins from."
   type        = string
-  sensitive   = true
+  default     = "app"
 }
 
+variable "argocd_subdomain" {
+  description = "Subdomain for the one ArgoCD path published to the internet (/api/webhook). The UI and the rest of the API stay ClusterIP - see argocd-webhook.tf."
+  type        = string
+  default     = "argocd"
+}
+
+variable "jenkins_subdomain" {
+  description = "Subdomain pointing at the Jenkins EC2 instance. Gives the GitHub webhook a target that survives the instance getting a new public IP."
+  type        = string
+  default     = "jenkins"
+}
+
+
+variable "aws_profile" {
+  description = "Named AWS profile to authenticate with, for both the AWS provider and the `aws eks get-token` calls the Kubernetes and Helm providers make. Empty (the default) uses whatever `aws configure` set up, which is the normal case here. Pass -var=aws_profile=... only when juggling several accounts."
+  type        = string
+  default     = ""
+}
