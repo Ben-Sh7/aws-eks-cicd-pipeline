@@ -1,6 +1,3 @@
-# Jenkins gets an instance profile rather than static AWS keys, scoped to
-# pushing the two ECR repos and nothing else.
-
 data "aws_iam_policy_document" "jenkins_assume_role" {
   statement {
     effect  = "Allow"
@@ -22,7 +19,7 @@ data "aws_iam_policy_document" "jenkins_ecr_push" {
   statement {
     effect    = "Allow"
     actions   = ["ecr:GetAuthorizationToken"]
-    resources = ["*"] # AWS does not support resource-level scoping for this action
+    resources = ["*"]
   }
 
   statement {
@@ -49,10 +46,6 @@ resource "aws_iam_role_policy" "jenkins_ecr_push" {
   policy = data.aws_iam_policy_document.jenkins_ecr_push.json
 }
 
-# Session Manager access. The bootstrap script sends all of its output to
-# /var/log/jenkins-bootstrap.log on the instance, which is unreadable from
-# outside without either an SSH key or SSM - and SSM is the one that does not
-# need port 22 open to the world.
 resource "aws_iam_role_policy_attachment" "jenkins_ssm" {
   role       = aws_iam_role.jenkins.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -64,12 +57,30 @@ resource "aws_iam_instance_profile" "jenkins" {
   tags        = local.common_tags
 }
 
+data "aws_iam_policy_document" "jenkins_bootstrap_secrets" {
+  statement {
+    effect  = "Allow"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      data.aws_secretsmanager_secret.github_token.arn,
+      aws_secretsmanager_secret.jenkins_admin.arn,
+      aws_secretsmanager_secret.jenkins_webhook.arn,
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "jenkins_bootstrap_secrets" {
+  name   = "${local.project_name}-jenkins-bootstrap-secrets"
+  role   = aws_iam_role.jenkins.id
+  policy = data.aws_iam_policy_document.jenkins_bootstrap_secrets.json
+}
+
 locals {
+  jenkins_secrets_dir = "/var/lib/jenkins/bootstrap-secrets"
+
   jenkins_groovy_script = templatefile("${path.module}/templates/jenkins-init.groovy.tftpl", {
-    repo_url               = "https://github.com/${var.github_repo}.git"
-    github_username        = var.github_username
-    github_pat             = var.github_pat
-    jenkins_admin_password = random_password.jenkins_admin.result
-    jenkins_webhook_secret = random_password.jenkins_webhook.result
+    repo_url        = "https://github.com/${local.github_repo}.git"
+    github_username = local.github_username
+    secrets_dir     = local.jenkins_secrets_dir
   })
 }

@@ -8,6 +8,9 @@ metadata:
     {{- include "task-manager.labels" . | nindent 4 }}
   annotations:
     kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    {{- if .Values.ingress.forceSslRedirect }}
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:

@@ -9,42 +9,30 @@ coverage/
 *.swp
 *.swo
 
-# Environment files hold real secrets - never commit them. No leading slash, so
-# this applies in every directory: .env, app/backend/.env,
-# app/frontend/.env.local, ... Only the .env.example templates (placeholders,
-# no real values) are tracked.
+# Real secrets. Unanchored, so it applies in every directory.
 .env
 .env.*
 !.env.example
 
-# Helm secret values - real DB credentials for local/demo installs.
-# NEVER commit this; copy values-secret.yaml.example instead.
+# Running the stack on this machine: docker-compose, env templates, local Helm
+# values. Not part of the repository - the project deploys to AWS.
+/local/
+
 gitops/task-manager/values-secret.yaml
 
-# Terraform state and local artifacts - MUST NEVER be committed.
-# State can contain sensitive resource attributes (and Terraform itself
-# warns against committing it). The provider lock file is safe/recommended
-# to commit (only hashes, no secrets) and is NOT excluded by these patterns.
-terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/*.tfplan
-terraform/tfplan
-terraform/destroy.tfplan
-terraform/crash*.log
+# Terraform artifacts. Plan files contain everything a state file does.
+# The provider lock files are safe to commit and are not excluded.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash*.log
+*.tfvars
+*.tfvars.json
 
-# terraform.tfvars may hold the GitHub PAT or other sensitive overrides -
-# never commit; only the .tfvars.example template is tracked.
-terraform/*.tfvars
-terraform/*.tfvars.json
-!terraform/*.tfvars.example
-
-# Local working notes - handover prompts, scratch plans. Not part of the project.
-# Note the trailing /*: an ignored *directory* is never descended into, so a
-# plain "docs/" would make the negations below silently do nothing.
+# Local working notes. The trailing /* matters: an ignored directory is never
+# descended into, so "docs/" alone would make the negations below do nothing.
 docs/*
-
-# ...except the two diagram images HLD.md renders. Everything else in docs/,
-# including the .drawio sources, stays local.
 !docs/architecture.png
 !docs/inside-the-cluster.png

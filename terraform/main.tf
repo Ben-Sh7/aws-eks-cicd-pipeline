@@ -24,26 +24,31 @@ terraform {
       source  = "hashicorp/http"
       version = "~> 3.4"
     }
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.2"
+    }
   }
 }
 
 provider "aws" {
-  region = var.aws_region
+  region  = var.aws_region
+  profile = var.aws_profile != "" ? var.aws_profile : null
 }
 
-data "aws_caller_identity" "current" {}
+provider "github" {
+  token = ephemeral.aws_secretsmanager_secret_version.github_token.secret_string
+  owner = local.github_owner
+}
 
-# Kubernetes/Helm provider auth. The token is fetched through the exec plugin
-# rather than data.aws_eks_cluster_auth: that data source is resolved once per
-# plan and stored in state, so on the next run Terraform configures the provider
-# with a token minted hours earlier - EKS tokens live 15 minutes, and the
-# refresh then fails with a bare "Unauthorized". exec mints one per call.
-# The aws CLI this needs is already a hard prerequisite of create.sh.
 locals {
   eks_exec = {
     api_version = "client.authentication.k8s.io/v1beta1"
     command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.main.name, "--region", var.aws_region]
+    args = concat(
+      ["eks", "get-token", "--cluster-name", aws_eks_cluster.main.name, "--region", var.aws_region],
+      var.aws_profile != "" ? ["--profile", var.aws_profile] : []
+    )
   }
 }
 
@@ -75,8 +80,6 @@ locals {
   project_name = var.project_name
   environment  = var.environment
 
-  # Hardcoded, not derived from project_name - these repos already hold
-  # real image history and must not be renamed/recreated.
   ecr_backend_repo_name  = "devops-task-manager-backend"
   ecr_frontend_repo_name = "devops-task-manager-frontend"
 
@@ -84,18 +87,9 @@ locals {
     Project     = local.project_name
     Environment = local.environment
     CreatedBy   = "Terraform"
-    # No CreatedDate here: timestamp() is unknown at plan time, which turned
-    # every tagged resource into a phantom in-place update on every run and
-    # forced the (immutable) gp3-tagged StorageClass to be replaced each time.
-    ManagedBy = "IaC"
+    ManagedBy   = "IaC"
   }
 
-  # The in-tree AWS cloud provider discovers subnets for a Service
-  # type=LoadBalancer by these tags. Once the nodes move to private subnets
-  # (nat.tf) the internet-facing ELB has nowhere to land without role/elb on the
-  # public subnets - ingress-nginx comes up but its LoadBalancer stays
-  # <pending> forever. The cluster tag is what makes the provider consider the
-  # subnet at all; "shared" is what EKS uses for BYO subnets, so no tag fight.
   public_subnet_lb_tags = {
     "kubernetes.io/role/elb"                      = "1"
     "kubernetes.io/cluster/${local.project_name}" = "shared"
@@ -203,16 +197,6 @@ resource "aws_security_group" "eks" {
   )
 }
 
-# GitHub publishes the source ranges its webhooks are delivered from. Reading
-# them here keeps the Jenkins ingress rule correct without pinning a list that
-# silently goes stale - if this endpoint is unreachable the plan fails loudly
-# rather than falling back to 0.0.0.0/0.
-#
-# The timeout is not optional. This provider defaults to no timeout at all, so a
-# host that accepts the connection and then never answers - a corporate proxy, a
-# firewall dropping packets silently, an outage at GitHub - leaves `terraform
-# plan` hanging forever with no output and no error. Ten seconds and one retry,
-# then fail with something readable.
 data "http" "github_meta" {
   url = "https://api.github.com/meta"
   request_headers = {
@@ -234,14 +218,27 @@ locals {
   ]
 }
 
+data "http" "my_ip" {
+  count = length(var.jenkins_ui_allowed_cidrs) == 0 ? 1 : 0
+
+  url                = "https://checkip.amazonaws.com"
+  request_timeout_ms = 10000
+
+  retry {
+    attempts     = 2
+    min_delay_ms = 1000
+  }
+}
+
+locals {
+  jenkins_ui_cidrs = length(var.jenkins_ui_allowed_cidrs) > 0 ? var.jenkins_ui_allowed_cidrs : ["${trimspace(data.http.my_ip[0].response_body)}/32"]
+}
+
 resource "aws_security_group" "jenkins" {
   name_prefix = "${local.project_name}-jenkins-"
   description = "Security group for Jenkins EC2 instance"
   vpc_id      = aws_vpc.main.id
 
-  # GitHub has to reach /github-webhook/ to trigger builds, so 8080 cannot be
-  # closed outright - but it does not need to be open to the internet either.
-  # These are GitHub's own published hook source ranges, read at plan time.
   ingress {
     description = "Jenkins webhook endpoint - GitHub published hook ranges"
     from_port   = 8080
@@ -250,23 +247,13 @@ resource "aws_security_group" "jenkins" {
     cidr_blocks = local.github_hook_cidrs
   }
 
-  # Human access to the Jenkins UI. create.sh fills this with the public IP it
-  # is running from; empty means nobody but GitHub can reach 8080.
-  dynamic "ingress" {
-    for_each = length(var.jenkins_ui_allowed_cidrs) > 0 ? [1] : []
-    content {
-      description = "Jenkins web UI, operator access only"
-      from_port   = 8080
-      to_port     = 8080
-      protocol    = "tcp"
-      cidr_blocks = var.jenkins_ui_allowed_cidrs
-    }
+  ingress {
+    description = "Jenkins web UI, operator access only"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = local.jenkins_ui_cidrs
   }
-
-  # No SSH rule on purpose. The instance is reached through SSM Session Manager
-  # (see the AmazonSSMManagedInstanceCore attachment in jenkins.tf), which needs
-  # no inbound port at all - port 22 open to 0.0.0.0/0 on a host holding the
-  # GitHub PAT and ECR push rights was the single largest hole here.
 
   egress {
     description = "Allow all outbound traffic"
@@ -346,8 +333,6 @@ resource "aws_eks_cluster" "main" {
   version  = var.kubernetes_version
 
   vpc_config {
-    # Both public and private, so EKS puts the private-endpoint ENIs in the
-    # private subnets and every subnet carries the cluster tag.
     subnet_ids              = [aws_subnet.public_1.id, aws_subnet.public_2.id, aws_subnet.private_1.id, aws_subnet.private_2.id]
     security_group_ids      = [aws_security_group.eks.id]
     endpoint_private_access = true
@@ -362,10 +347,6 @@ resource "aws_eks_cluster" "main" {
   )
 }
 
-# A node group's own `tags` only tag the EKS node group object - they do NOT
-# reach the EC2 instances or their volumes. A launch template with
-# tag_specifications is the only way to tag those, and verify_cleanup in
-# destroy.sh looks for orphans by the Project tag, so this is required.
 resource "aws_launch_template" "eks_nodes" {
   name_prefix = "${local.project_name}-nodes-"
 
@@ -396,11 +377,8 @@ resource "aws_eks_node_group" "main" {
   cluster_name    = aws_eks_cluster.main.name
   node_group_name = "${local.project_name}-nodes"
   node_role_arn   = aws_iam_role.eks_node_role.arn
-  # Private subnets: the nodes get no public IP, and nothing on the internet has
-  # a route to them even if a security group rule were opened by mistake.
-  # Egress for image pulls goes through the NAT gateway (nat.tf).
-  subnet_ids = [aws_subnet.private_1.id, aws_subnet.private_2.id]
-  version    = var.kubernetes_version
+  subnet_ids      = [aws_subnet.private_1.id, aws_subnet.private_2.id]
+  version         = var.kubernetes_version
 
   scaling_config {
     desired_size = var.node_desired_size
@@ -448,7 +426,19 @@ resource "aws_instance" "jenkins" {
 
   user_data = templatefile("${path.module}/templates/jenkins-user-data.sh.tftpl", {
     groovy_script = local.jenkins_groovy_script
+    aws_region    = var.aws_region
+    secrets_dir   = local.jenkins_secrets_dir
+
+    github_token_secret_id    = data.aws_secretsmanager_secret.github_token.arn
+    jenkins_admin_secret_id   = aws_secretsmanager_secret.jenkins_admin.arn
+    jenkins_webhook_secret_id = aws_secretsmanager_secret.jenkins_webhook.arn
   })
+
+  depends_on = [
+    aws_iam_role_policy.jenkins_bootstrap_secrets,
+    aws_secretsmanager_secret_version.jenkins_admin,
+    aws_secretsmanager_secret_version.jenkins_webhook,
+  ]
 
   tags = merge(
     local.common_tags,
@@ -458,7 +448,7 @@ resource "aws_instance" "jenkins" {
 
 data "aws_ami" "ubuntu" {
   most_recent = true
-  owners      = ["099720109477"] # Canonical
+  owners      = ["099720109477"]
 
   filter {
     name   = "name"
@@ -474,8 +464,7 @@ data "aws_ami" "ubuntu" {
 resource "aws_ecr_repository" "backend" {
   name                 = local.ecr_backend_repo_name
   image_tag_mutability = "MUTABLE"
-  # Without this, terraform destroy fails on a non-empty repo.
-  force_delete = true
+  force_delete         = true
   image_scanning_configuration {
     scan_on_push = true
   }

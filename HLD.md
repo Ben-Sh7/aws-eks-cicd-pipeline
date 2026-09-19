@@ -72,22 +72,19 @@ Browser → ingress → frontend → backend → database. Nothing skips a step.
 
 </details>
 
-### Google sign-in: local environment only
+### Google sign-in
 
-Google sign-in is built in and works in the **local environment** — `npm run dev` or `docker compose`. **It is switched off in the AWS infrastructure.**
+Google only returns users to an **HTTPS** address on a **fixed domain**, so both used to be blockers. The domain is now an input to the infrastructure rather than something it discovers afterwards, and TLS terminates on the load balancer with an ACM certificate, so the only thing left is the credential itself.
 
-Google only redirects back to an **HTTPS** address on a **fixed domain**. The infrastructure serves plain HTTP on the ingress Load Balancer's generated name, which changes on every `create.sh` run.
+That credential belongs to a Google project, not to this infrastructure, so Terraform never holds it. It sits in the Secrets Manager entry maintained by hand, and Terraform only passes that entry's name to the chart:
 
-**To make it work in the infrastructure, a domain is needed for HTTPS requests:**
-
-| Needed | For |
+| Step | Why |
 |---|---|
-| A domain, pointed at the ingress Load Balancer | A fixed address that survives every `create.sh` |
-| A TLS certificate for that domain | HTTPS — Google refuses plain-HTTP redirect addresses |
-| `https://<domain>/api/auth/callback` registered on the Google OAuth client | Google only returns users to registered addresses |
-| `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in Secrets Manager, delivered by External Secrets | Same path as the other secrets — never Git or Helm values |
+| `https://app.<domain>/api/auth/callback` registered on the Google OAuth client | Google only returns users to registered addresses |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in the credentials entry | The value reaches AWS without passing through Terraform, Git, or a local file |
+| External Secrets syncs both into the cluster | Same path as every other secret |
 
-Until then nothing Google-related is configured: without a client ID the backend refuses every Google token, and the login page hides the button.
+`terraform output google_redirect_uri` and `credentials_secret` print what is needed. Leave the keys out and the backend refuses every Google token and the login page hides the button, while username + password sign-in works as usual.
 
 ---
 
@@ -120,11 +117,13 @@ It acts on the difference, not on a file changing.
 
 <br>
 
-Six values can't live in Git: the RDS endpoint, the names of the RDS master secret and the JWT secret, the two ECR registry URLs, and the app's own address. They embed account-specific data or only exist after `terraform apply`.
+Several values can't live in Git: the RDS endpoint, the names of the RDS master secret, the JWT secret and the Google credential, the two ECR registry URLs, and the app's own address. They embed account-specific data or are generated during the apply.
 
-The app's address is the ingress Load Balancer's DNS name. It changes on every run, and the frontend needs it as `APP_URL` to reject cross-site requests.
+Terraform creates the ArgoCD `Application` itself — it travels with the ArgoCD Helm release, which puts it after the CRDs that define its kind — and passes all of them in as Helm parameters. They are ordinary Terraform references, so a mistake is a plan-time error rather than something that surfaces as a broken app.
 
-`create.sh` reads all six from `terraform output` and the cluster, and injects them into the ArgoCD Application as Helm parameters. The chart refuses to render if the JWT secret name or the app address is missing, so a gap shows up as a clear sync error rather than a broken app.
+The app's address is the one that used to be awkward: it was the ingress Load Balancer's generated DNS name, known only after the cluster was up and different on every rebuild, and the frontend needs it as `APP_URL` to reject cross-site requests. With a domain it is decided before anything is built, and the load balancer's hostname is just the target of a CNAME.
+
+The chart refuses to render if the JWT secret name or the app address is missing, so a gap shows up as a clear sync error rather than a broken app.
 
 The chart itself stays generic. Deploying into a different AWS account needs no edit to it.
 
@@ -150,7 +149,7 @@ The chart itself stays generic. Deploying into a different AWS account needs no 
 
 ## Alerting
 
-`warning` and `critical` alerts go to Slack when `TF_VAR_slack_webhook_url` is set. Without it they still reach Alertmanager's UI.
+`warning` and `critical` alerts go to Slack. The URL is never a Terraform input: External Secrets reads `SLACK_WEBHOOK_URL` out of the hand-maintained credentials entry, copies it into the monitoring namespace, and Alertmanager reads it from a mounted file (`api_url_file`) - so it reaches neither the state file nor a rendered Helm value. Without that key, alerts still reach Alertmanager's own UI.
 
 Three things are silenced on purpose:
 
@@ -242,13 +241,32 @@ See `destroy.sh` for the implementation.
 
 ---
 
+## Design notes
+
+Decisions that are not obvious from reading the code, and that something depends on.
+
+| Decision | Why |
+|---|---|
+| ingress-nginx service: `targetPorts.https = http` | TLS terminates on the load balancer, so the controller receives plain HTTP on both ports. Without this it expects a second TLS handshake on 443 and every request fails |
+| ingress-nginx config: `use-forwarded-headers` | With TLS terminated upstream, `X-Forwarded-Proto` is the only way nginx can tell HTTP from HTTPS - and the only way a redirect-to-HTTPS rule avoids looping |
+| The four Helm releases are chained with `depends_on` | The provider shares one repository cache across resources; installing them in parallel makes all but one fail with "no cached repo found" on a cold cache. external-secrets also has to precede monitoring, whose release ships an ExternalSecret |
+| The ArgoCD Application rides in the argo-cd release's `extraObjects` | Helm installs a chart's CRDs before its templates, so the Application kind exists when the object is created. A standalone `kubernetes_manifest` is evaluated at plan time and fails on a from-scratch apply |
+| Kubernetes/Helm providers authenticate through `aws eks get-token`, not `aws_eks_cluster_auth` | That data source resolves once per plan and is stored in state, so the next run configures the provider with a token minted hours earlier. EKS tokens live 15 minutes |
+| No SSH rule on the Jenkins security group | The instance is reached through SSM Session Manager, which needs no inbound port. Port 22 open on a host holding the GitHub token and ECR push rights was the largest hole here |
+| `aws_route53_record.cert_validation` sets `allow_overwrite` | A stale validation record from a previous certificate in the same zone would otherwise block the apply |
+| Grafana's admin login comes from an ExternalSecret, not a Helm value | A Helm value is an argument of the release resource and would be recorded in state, undoing the write-only argument that generated it |
+| kubeScheduler, kubeControllerManager and kubeEtcd are disabled in kube-prometheus-stack | EKS runs them on AWS's side where nothing can scrape them, so their rules would fire "down" forever. An alert that is always firing teaches you to ignore the channel |
+| ECR repository names do not follow `project_name` | Those repositories already hold image history and must not be recreated |
+
+---
+
 ## Known limitations
 
 | Limitation | Trade-off |
 |---|---|
-| **No HTTPS** | Passwords and session cookies cross the internet in plain text, and cookies can't be `Secure`. Accepted for a practice project with no real users — fixing it needs a domain and a certificate |
-| **Google sign-in works only in the local environment** | Making it work in the infrastructure needs a domain for HTTPS requests — see [Google sign-in](#google-sign-in-local-environment-only) |
-| JWT signing key is in Terraform state | Like the Grafana and Jenkins passwords. State is local and gitignored; the RDS password is the one secret that never enters it |
+| Two webhook signing secrets are in Terraform state | Unavoidable: Terraform hands the same value to GitHub and to the receiver, and an ephemeral value cannot reach an ordinary resource argument. Everything else it generates is written with a write-only argument and never recorded — see [State](#state) |
+| The domain must already be a delegated Route53 zone | Terraform looks the zone up rather than creating it; a zone created in the same apply would not be delegated, and certificate validation would wait on DNS nobody can answer |
+| A rebuild changes the Jenkins IP | The DNS record follows it, so the webhook keeps working, but the record's 60s TTL means a minute of stale answers |
 | RDS is single-AZ | `multi_az = true` when uptime beats cost |
 | One NAT gateway, not one per AZ | ~$32/month instead of ~$64. An AZ outage takes egress for both |
 | S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
@@ -268,14 +286,39 @@ See `destroy.sh` for the implementation.
 2. The `github-credentials` credential
 3. The `task-manager` pipeline job, wired to this repo
 
-`create.sh` then points both webhooks at the new instance and starts the first build through the Jenkins API — ECR is empty after every run, and without a build the pods would wait for the next push.
+The same Groovy script queues that job's first build — ECR is empty after every rebuild, and without one the pods would wait for the next push.
+
+The three secrets it needs (its admin password, the webhook signing secret, and the GitHub token) are **not** rendered into `user_data`. Anything written there can be read back by every process on the instance through the metadata service, and is shown in plain text in the EC2 console. `user_data` carries only their Secrets Manager identifiers and fetches the values at boot with the instance's own IAM role, into files readable by the `jenkins` user alone.
+
+Both webhooks are Terraform resources (`terraform/github.tf`) pointing at DNS names, so replacing the instance does not invalidate them.
 
 ---
 
 ## Deployment
 
 ```bash
-cp .env.example .env   # fill in real values
-./create.sh            # up — the app is live ~10 minutes after it finishes
-./destroy.sh           # down
+cd terraform && terraform init && terraform apply   # up
+./destroy.sh                                        # down, from the project root
 ```
+
+One `terraform apply` builds everything, including DNS, the certificate, both GitHub webhooks and the first CI build. The app is live about ten minutes after it finishes, once that build has pushed images and ArgoCD has synced them.
+
+There is no configuration file and no environment to set up. Three Secrets Manager entries - created once per account, outside the stack's lifecycle - carry the domain, the repository, the GitHub token and the Slack/Google credentials. Terraform reads the configuration ordinarily, reads the token through an `ephemeral` resource that it is not permitted to persist, and never reads the cluster's credentials at all: those go straight from AWS to the External Secrets operator. Nothing secret exists on the machine running the apply, which is also why `terraform destroy` needs no inputs.
+
+### State
+
+State is not a byproduct. It is the only record of what exists in the account, and it contains secrets, so it lives in S3 rather than next to the code: KMS-encrypted with a customer-managed key, versioned so a corrupted state is a restore rather than a rebuild, locked (S3 conditional writes - no DynamoDB table needed since Terraform 1.10) so two applies cannot overwrite each other, and with a bucket policy refusing anything that is not TLS. `terraform/bootstrap/` creates it; that configuration is the one place a local state file is acceptable, because it holds a bucket and a key and nothing else.
+
+What is *in* the state is then a deliberate, short list. Secrets fall into three groups:
+
+| | Where the value lives | How |
+|---|---|---|
+| RDS password | AWS only | `manage_master_user_password` - AWS creates and rotates it; Terraform never sees it |
+| JWT key, Jenkins + Grafana admin | AWS only | Generated by an `ephemeral` resource and written with `secret_string_wo`, a write-only argument: sent to AWS, never recorded |
+| Two webhook signing secrets | State (encrypted) | Terraform must hand the *same* value to GitHub and to the receiver, and both are ordinary resource arguments, which an ephemeral value may not reach |
+
+The third row is the honest one. Zero secrets in state is not achievable when Terraform's job is to make two systems agree on a shared secret - which is why the professional answer is to protect state rather than to pretend it can be emptied.
+
+Rotation of the second group is a single counter, `generated_secret_version`; incrementing it rewrites all three with fresh values.
+
+Teardown keeps a script, because it is the asymmetric half: the load balancer and the EBS volumes are created by Kubernetes rather than by Terraform, so nothing in the state file knows they have to go first.

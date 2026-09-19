@@ -18,14 +18,24 @@ output "eks_cluster_endpoint" {
   description = "EKS cluster endpoint"
 }
 
+output "app_url" {
+  value       = local.app_url
+  description = "The address users open. Live once the first Jenkins build has pushed images and ArgoCD has synced them - about ten minutes after apply finishes."
+}
+
+output "jenkins_url" {
+  value       = "http://${local.jenkins_fqdn}:8080"
+  description = "Jenkins UI (user: admin). Reachable from the IP the apply ran from, and from GitHub's webhook ranges - nowhere else."
+}
+
 output "jenkins_public_ip" {
   value       = aws_instance.jenkins.public_ip
-  description = "Jenkins public IP (use http://<IP>:8080)"
+  description = "Jenkins public IP, behind the DNS record above"
 }
 
 output "github_repo" {
-  value       = var.github_repo
-  description = "GitHub repo (owner/repo) - used by create.sh to manage the webhook"
+  value       = local.github_repo
+  description = "GitHub repo (owner/repo) the CI and GitOps flow is wired to"
 }
 
 output "backend_repository_url" {
@@ -43,8 +53,6 @@ output "external_secrets_role_arn" {
   description = "IRSA role bound to the external-secrets ServiceAccount"
 }
 
-# Both are only known after apply, and both change on every create.sh run -
-# create.sh feeds them to the chart as ArgoCD helm parameters.
 output "rds_endpoint" {
   value       = aws_db_instance.postgres.address
   description = "RDS Postgres hostname - the app's DB_HOST"
@@ -55,12 +63,13 @@ output "rds_master_secret_name" {
   description = "ARN of the AWS-managed RDS master secret that External Secrets reads"
 }
 
-# Instructions only - never the password itself, even as a sensitive output.
 output "grafana_access_instructions" {
   value       = <<-EOT
     kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
-    http://localhost:3000 - user: admin, password:
+    http://localhost:3000 - then read the login from AWS:
       aws secretsmanager get-secret-value --secret-id ${aws_secretsmanager_secret.grafana_admin.name} --query SecretString --output text
+    (returns {"admin-user":"admin","admin-password":"..."} - Terraform generated
+     it without ever holding it, so AWS is the only place it exists)
   EOT
   description = "How to reach Grafana (ClusterIP only)"
 }
@@ -79,23 +88,13 @@ output "argocd_access_instructions" {
   description = "How to reach ArgoCD (ClusterIP only)"
 }
 
-output "argocd_webhook_secret_name" {
-  description = "Secrets Manager entry holding the shared secret GitHub signs ArgoCD webhook payloads with. create.sh reads it to register the hook; the value is never printed."
-  value       = aws_secretsmanager_secret.argocd_webhook.name
-}
-
-output "jenkins_webhook_secret_name" {
-  description = "Secrets Manager entry holding the shared secret GitHub signs Jenkins webhook payloads with. create.sh reads it to register the hook; the value is never printed."
-  value       = aws_secretsmanager_secret.jenkins_webhook.name
-}
-
-output "jenkins_admin_secret_name" {
-  description = "Secrets Manager entry holding the Jenkins admin password. create.sh reads it to start the first build through the Jenkins API; the value is never printed."
-  value       = aws_secretsmanager_secret.jenkins_admin.name
+output "kubeconfig_command" {
+  value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${aws_eks_cluster.main.name}"
+  description = "Points kubectl at this cluster. Not needed for the system to run - only for looking at it."
 }
 
 output "jwt_secret_name" {
-  description = "Secrets Manager entry holding the key the backend signs access tokens with. create.sh passes the name to the chart and External Secrets copies the value into the cluster; the value is never printed."
+  description = "Secrets Manager entry holding the key the backend signs access tokens with. External Secrets copies the value into the cluster; it is never printed."
   value       = aws_secretsmanager_secret.jwt_secret.name
 }
 
@@ -104,7 +103,28 @@ output "nat_gateway_public_ip" {
   value       = aws_eip.nat.public_ip
 }
 
+output "credentials_secret" {
+  description = "The Secrets Manager entry the cluster reads Slack and Google credentials from, and the JSON shape expected in it. Keys may be left out; each missing one only switches its own feature off."
+  value       = <<-EOT
+    ${data.aws_secretsmanager_secret.app.name}
+
+    aws secretsmanager put-secret-value --secret-id ${data.aws_secretsmanager_secret.app.name} --secret-string '{
+      "SLACK_WEBHOOK_URL":    "https://hooks.slack.com/services/...",
+      "GOOGLE_CLIENT_ID":     "....apps.googleusercontent.com",
+      "GOOGLE_CLIENT_SECRET": "..."
+    }'
+
+    External Secrets re-reads it hourly, so a change lands within the hour -
+    immediately if the pod that consumes it is restarted.
+  EOT
+}
+
+output "google_redirect_uri" {
+  description = "Register this on the Google OAuth client, or Google refuses to return users to the app. It is derived from the domain, so it only changes if the domain does."
+  value       = "${local.app_url}/api/auth/callback"
+}
+
 output "slack_alerting" {
-  description = "Whether Alertmanager routes to Slack. 'disabled' means it is on the chart default (null receiver); set TF_VAR_slack_webhook_url in .env to enable."
-  value       = local.slack_alerting_enabled ? "enabled (channel ${var.slack_channel})" : "disabled - set TF_VAR_slack_webhook_url"
+  description = "Whether Alertmanager is configured to route to Slack. 'enabled' means the routing exists - delivery also needs the real URL from slack_webhook_setup."
+  value       = var.enable_slack_alerts ? "enabled (channel ${var.slack_channel})" : "disabled - set enable_slack_alerts = true"
 }

@@ -1,6 +1,3 @@
-# EBS CSI driver - the in-tree provisioner was removed in Kubernetes 1.23+,
-# so without this the Prometheus/Grafana PVCs can't provision at all.
-
 data "aws_iam_policy_document" "ebs_csi_assume_role" {
   statement {
     effect  = "Allow"

@@ -40,15 +40,22 @@ spec:
             configMapKeyRef:
               name: app-config
               key: APP_URL
-        # Set here as well as in the Dockerfile: the container runtime sets
-        # HOSTNAME to the pod name, and Next.js would then listen only on the
-        # address that name resolves to instead of on every interface.
+        - name: GOOGLE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: app-secret
+              key: GOOGLE_CLIENT_ID
+              optional: true
+        - name: GOOGLE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: app-secret
+              key: GOOGLE_CLIENT_SECRET
+              optional: true
         - name: HOSTNAME
           value: "0.0.0.0"
         resources:
           {{- toYaml .Values.frontend.resources | nindent 10 }}
-        # /api/health, not /: the root page redirects to /login, which would
-        # count as healthy even if the app behind it were broken.
         livenessProbe:
           httpGet:
             path: /api/health

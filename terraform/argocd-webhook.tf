@@ -1,13 +1,3 @@
-# ArgoCD polls git every 180s (timeout.reconciliation), so a deploy sits idle
-# for up to three minutes after CI pushes the new image tag. A GitHub webhook
-# collapses that to seconds.
-#
-# The catch is that receiving a webhook means exposing the ArgoCD API server,
-# which is deliberately ClusterIP. So exactly one path is published - the
-# ingress below uses pathType Exact, which matches /api/webhook and nothing
-# else: not the UI, not /api/v1, not the gRPC endpoint. Those stay reachable
-# only through kubectl port-forward, as before.
-
 resource "random_password" "argocd_webhook" {
   length  = 40
   special = false
@@ -29,15 +19,11 @@ resource "aws_secretsmanager_secret_version" "argocd_webhook" {
   secret_string = random_password.argocd_webhook.result
 }
 
-# Payloads that are not signed with the secret above are rejected by ArgoCD, so
-# the open path cannot be used to force syncs.
 resource "kubernetes_ingress_v1" "argocd_webhook" {
   metadata {
     name      = "argocd-webhook"
     namespace = "argocd"
     annotations = {
-      # argocd-server keeps its own TLS; nginx talks HTTPS to it rather than the
-      # alternative of running the server with --insecure just to serve one path.
       "nginx.ingress.kubernetes.io/backend-protocol" = "HTTPS"
     }
     labels = {
@@ -50,6 +36,8 @@ resource "kubernetes_ingress_v1" "argocd_webhook" {
     ingress_class_name = "nginx"
 
     rule {
+      host = local.argocd_fqdn
+
       http {
         path {
           path      = "/api/webhook"
