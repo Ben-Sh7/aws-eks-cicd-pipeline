@@ -178,19 +178,6 @@ variable "slack_channel" {
   default     = "#alerts"
 }
 
-# ---------------------------------------------------------------------------
-# DNS. The domain itself is not here - it is read from the configuration secret
-# (external-config.tf), like the repository and the GitHub token, so that
-# nothing about this deployment has to be written down on the machine running
-# it. What is left are the labels in front of it.
-#
-# The domain is what makes a single `terraform apply` enough: every address the
-# system needs to know about itself - the app's own URL, the webhook targets -
-# is derived from it and is therefore known before apply, instead of being
-# discovered afterwards from the load balancer AWS happened to hand out. It is
-# also what HTTPS and Google sign-in require.
-# ---------------------------------------------------------------------------
-
 variable "app_subdomain" {
   description = "Subdomain the app is served on. This is the address users open and the only origin the frontend accepts sign-ins from."
   type        = string
@@ -208,7 +195,6 @@ variable "jenkins_subdomain" {
   type        = string
   default     = "jenkins"
 }
-
 
 variable "aws_profile" {
   description = "Named AWS profile to authenticate with, for both the AWS provider and the `aws eks get-token` calls the Kubernetes and Helm providers make. Empty (the default) uses whatever `aws configure` set up, which is the normal case here. Pass -var=aws_profile=... only when juggling several accounts."

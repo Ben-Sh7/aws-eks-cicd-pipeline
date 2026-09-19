@@ -63,7 +63,6 @@ output "rds_master_secret_name" {
   description = "ARN of the AWS-managed RDS master secret that External Secrets reads"
 }
 
-# Instructions only - never the password itself, even as a sensitive output.
 output "grafana_access_instructions" {
   value       = <<-EOT
     kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80
@@ -103,15 +102,6 @@ output "nat_gateway_public_ip" {
   description = "The single public IP all worker-node egress leaves from now that the nodes are in private subnets. This is the address to allowlist if the cluster calls a third-party API that filters by source IP."
   value       = aws_eip.nat.public_ip
 }
-
-# ---------------------------------------------------------------------------
-# The credentials Terraform does not own.
-#
-# Slack and Google live in the entry you created by hand, alongside nothing
-# else; Terraform passes its name to the External Secrets operator and never
-# reads it. These outputs are reminders of the shape it expects and of the one
-# address Google has to be told about - not steps of the deployment.
-# ---------------------------------------------------------------------------
 
 output "credentials_secret" {
   description = "The Secrets Manager entry the cluster reads Slack and Google credentials from, and the JSON shape expected in it. Keys may be left out; each missing one only switches its own feature off."

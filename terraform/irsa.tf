@@ -1,6 +1,3 @@
-# IRSA for External Secrets Operator: lets its pod read AWS Secrets Manager
-# without static AWS keys. Bound to the ServiceAccount via helm-addons.tf.
-
 data "tls_certificate" "eks" {
   url = aws_eks_cluster.main.identity[0].oidc[0].issuer
 }
@@ -18,8 +15,7 @@ resource "aws_iam_openid_connect_provider" "eks" {
 
 locals {
   oidc_provider_url_no_scheme = replace(aws_iam_openid_connect_provider.eks.url, "https://", "")
-  # Must match the external-secrets helm_release's namespace + ServiceAccount name.
-  eso_service_account = "system:serviceaccount:external-secrets:external-secrets"
+  eso_service_account         = "system:serviceaccount:external-secrets:external-secrets"
 }
 
 data "aws_iam_policy_document" "eso_assume_role" {
@@ -52,14 +48,6 @@ resource "aws_iam_role" "external_secrets" {
   tags               = local.common_tags
 }
 
-# Scoped to exactly the entries that are pulled into the cluster: the RDS master
-# secret, the JWT key and the Grafana admin login that Terraform generates, and
-# the one entry you maintain by hand, which carries the Slack URL and the Google
-# client.
-#
-# The GitHub token lives in a separate entry that this role cannot read - which
-# is the reason it is separate. A compromise of the operator would otherwise
-# hand over push access to the repository along with everything else.
 data "aws_iam_policy_document" "eso_secrets_access" {
   statement {
     effect = "Allow"

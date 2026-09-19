@@ -1,14 +1,7 @@
 #!/bin/bash
-# Tears down everything: ArgoCD app -> ingress-nginx LB -> monitoring PVCs
-# -> terraform destroy -> verify_cleanup. Order matters: each step releases
-# resources the next step's deletion depends on being gone.
-#
-# There is no matching create script: `terraform apply` builds the whole system
-# on its own. This one exists because teardown is the asymmetric half - the load
-# balancer and the EBS volumes are created by Kubernetes, not by Terraform, so
-# nothing in the state file knows to remove them first, and a plain `terraform
-# destroy` can stall on a VPC that still has a load balancer in it or leave
-# volumes behind that are billed by the hour.
+# Ordered teardown. The load balancer and the EBS volumes are created by
+# Kubernetes, not Terraform, so `terraform destroy` alone can stall on the VPC
+# or leave volumes billing.
 
 set -e
 
@@ -17,15 +10,11 @@ TERRAFORM_DIR="$PROJECT_DIR/terraform"
 AWS_REGION="us-east-1"
 PROJECT_TAG="task-manager"
 
-# No environment to load. Terraform reads the domain, the repository and the
-# GitHub token from AWS Secrets Manager (terraform/external-config.tf), so a
-# teardown needs nothing but AWS credentials.
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 print_header() {
     echo -e "\n${RED}╔════════════════════════════════════════════╗${NC}"
@@ -78,11 +67,7 @@ confirm_destruction() {
     fi
 }
 
-# The Prometheus PVC comes from a StatefulSet volumeClaimTemplate and the Grafana
-# one from the chart's persistence block. Neither `helm uninstall` nor terraform
-# destroy removes them, so their EBS volumes would survive the cluster and keep
-# billing - this must run while the cluster still exists. (Alertmanager has no
-# PVC; its storage is left at the chart default, emptyDir.)
+# Must run while the cluster exists: nothing else deletes these PVCs.
 delete_monitoring_pvcs() {
     print_header "DELETING MONITORING PERSISTENT VOLUMES"
 
@@ -151,8 +136,7 @@ delete_app_release() {
     fi
 }
 
-# Uninstalled here (not left to terraform destroy) so we can poll AWS
-# until the ELB is actually gone before touching the VPC/security groups.
+# Uninstalled here so we can wait for the ELB to actually disappear.
 delete_ingress_nginx_early() {
     print_header "RELEASING INGRESS LOAD BALANCER"
 
@@ -187,8 +171,6 @@ delete_ingress_nginx_early() {
     print_warning "A Load Balancer is still visible after 2 minutes - terraform destroy will likely still work (AWS eventual consistency), but check manually if it fails."
 }
 
-# Retried once on failure - a DependencyViolation from a stray ENI usually
-# self-resolves within a minute.
 delete_infrastructure() {
     print_header "DELETING TERRAFORM INFRASTRUCTURE"
 
@@ -211,13 +193,8 @@ delete_infrastructure() {
     cd "$PROJECT_DIR"
 }
 
-# delete_monitoring_pvcs waits for the PVC objects to disappear and treats that
-# as the volumes being gone, but PV deletion is asynchronous: the CSI driver
-# only then calls DeleteVolume against AWS. terraform destroy tears that driver
-# down along with the cluster, so the call can be lost and the EBS volumes
-# survive - billed hourly, and easy to miss. This sweep runs after terraform and
-# deletes what is provably left over: volumes that are unattached AND tagged as
-# belonging to this project.
+# PV deletion is asynchronous; the CSI driver can lose the call when the
+# cluster goes. Sweeps what is unattached AND tagged as ours.
 delete_orphaned_volumes() {
     print_header "SWEEPING UP ORPHANED EBS VOLUMES"
 
@@ -297,8 +274,6 @@ verify_cleanup() {
         fi
     fi
 
-    # Covers every dynamically-provisioned volume (Prometheus, Grafana) -
-    # the gp3-tagged StorageClass stamps them all with Project=task-manager.
     print_step "Checking for leftover EBS volumes..."
     local orphan_volumes=$(aws ec2 describe-volumes \
         --filters "Name=status,Values=available" "Name=tag:Project,Values=task-manager" \
@@ -333,8 +308,6 @@ verify_cleanup() {
         print_success "No RDS instance (✓)"
     fi
 
-    # skip_final_snapshot is set, so there should be none - but a snapshot
-    # outlives its instance and keeps billing for storage.
     print_step "Checking RDS snapshots..."
     local rds_snapshots=$(aws rds describe-db-snapshots \
         --db-instance-identifier task-manager-postgres \
@@ -348,8 +321,6 @@ verify_cleanup() {
         print_success "No RDS snapshots (✓)"
     fi
 
-    # A NAT gateway bills ~$0.045/hr until its state reaches "deleted". "deleted"
-    # and "failed" ones are free and linger in the API for ~1h, so exclude them.
     print_step "Checking NAT Gateways..."
     local nat_gateways=$(aws ec2 describe-nat-gateways \
         --filter "Name=tag:Project,Values=task-manager" "Name=state,Values=pending,available,deleting" \
@@ -363,8 +334,6 @@ verify_cleanup() {
         print_success "No live NAT Gateways (✓)"
     fi
 
-    # The NAT gateway's Elastic IP. If terraform removed the NAT gateway but the
-    # EIP release failed, it sits unassociated and bills ~$0.005/hr while held.
     print_step "Checking this project's Elastic IPs..."
     local project_eips=$(aws ec2 describe-addresses \
         --filters "Name=tag:Project,Values=task-manager" \
@@ -400,8 +369,6 @@ verify_cleanup() {
         print_success "No Load Balancers (✓)"
     fi
 
-    # Secrets bill while pending deletion. Ours use recovery_window_in_days = 0,
-    # and AWS deletes the RDS-managed secret along with the DB instance.
     print_step "Checking Secrets Manager secrets..."
     local secrets_left=$(aws secretsmanager list-secrets \
         --query "length(SecretList[?starts_with(Name, 'task-manager/')])" \

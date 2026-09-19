@@ -241,6 +241,25 @@ See `destroy.sh` for the implementation.
 
 ---
 
+## Design notes
+
+Decisions that are not obvious from reading the code, and that something depends on.
+
+| Decision | Why |
+|---|---|
+| ingress-nginx service: `targetPorts.https = http` | TLS terminates on the load balancer, so the controller receives plain HTTP on both ports. Without this it expects a second TLS handshake on 443 and every request fails |
+| ingress-nginx config: `use-forwarded-headers` | With TLS terminated upstream, `X-Forwarded-Proto` is the only way nginx can tell HTTP from HTTPS - and the only way a redirect-to-HTTPS rule avoids looping |
+| The four Helm releases are chained with `depends_on` | The provider shares one repository cache across resources; installing them in parallel makes all but one fail with "no cached repo found" on a cold cache. external-secrets also has to precede monitoring, whose release ships an ExternalSecret |
+| The ArgoCD Application rides in the argo-cd release's `extraObjects` | Helm installs a chart's CRDs before its templates, so the Application kind exists when the object is created. A standalone `kubernetes_manifest` is evaluated at plan time and fails on a from-scratch apply |
+| Kubernetes/Helm providers authenticate through `aws eks get-token`, not `aws_eks_cluster_auth` | That data source resolves once per plan and is stored in state, so the next run configures the provider with a token minted hours earlier. EKS tokens live 15 minutes |
+| No SSH rule on the Jenkins security group | The instance is reached through SSM Session Manager, which needs no inbound port. Port 22 open on a host holding the GitHub token and ECR push rights was the largest hole here |
+| `aws_route53_record.cert_validation` sets `allow_overwrite` | A stale validation record from a previous certificate in the same zone would otherwise block the apply |
+| Grafana's admin login comes from an ExternalSecret, not a Helm value | A Helm value is an argument of the release resource and would be recorded in state, undoing the write-only argument that generated it |
+| kubeScheduler, kubeControllerManager and kubeEtcd are disabled in kube-prometheus-stack | EKS runs them on AWS's side where nothing can scrape them, so their rules would fire "down" forever. An alert that is always firing teaches you to ignore the channel |
+| ECR repository names do not follow `project_name` | Those repositories already hold image history and must not be recreated |
+
+---
+
 ## Known limitations
 
 | Limitation | Trade-off |
