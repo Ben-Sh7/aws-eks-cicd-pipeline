@@ -210,34 +210,33 @@ Trivy itself is pinned to a fixed version and checksum-verified, not pulled from
 
 ## Teardown
 
-Order matters — each step frees something the next one needs gone.
+```bash
+terraform destroy
+```
 
-1. Delete the ArgoCD Application *(cascades)*
-2. Uninstall ingress-nginx, wait for its Load Balancer to disappear
-3. Delete the monitoring PVCs
-4. `terraform destroy` — RDS, NAT gateway and Elastic IP included
-5. Sweep for orphaned EBS volumes
-6. Delete the two GitHub webhooks
-7. `verify_cleanup()` — check AWS directly for anything still billing
+Nothing else. The dependency graph already orders it correctly: the Helm
+releases go first, then the node group (~5 min), then the cluster (~10 min),
+and only then the subnets and the VPC. By the time anything touches the
+network, the load balancer Kubernetes created has been gone for a quarter of
+an hour - which is why no wait, retry or sweep is needed between them.
 
-<details>
-<summary>Why steps 5 and 6 exist</summary>
+Two things had to be arranged for that to hold:
 
-<br>
+| | |
+|---|---|
+| The ArgoCD `Application` carries **no finalizer** | Helm deletes the Application and the ArgoCD controller in the same uninstall. A finalizer would wait for a controller that is already going, and hang until the timeout. Nothing is lost by dropping it: the app owns only ClusterIP Services, Deployments and an Ingress - no cloud resources |
+| The `monitoring` namespace is a **Terraform resource**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the Prometheus and Grafana PVCs live in it - their EBS volumes would survive the cluster and keep billing. Deleting the namespace deletes the PVCs, and Terraform waits for that deletion to finish, which cannot happen until the volumes are actually released. The other three namespaces have no PVCs and need no such handling |
 
-**Step 5 — the PVC deletion in step 3 isn't reliable.**
+To confirm nothing was left behind:
 
-Deleting a PVC is asynchronous. The CSI driver only *then* calls AWS to delete the volume. But `terraform destroy` tears that driver down along with the cluster, so the call can be lost and the volumes survive — billed hourly, and invisible unless someone reads the output closely.
+```bash
+aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=task-manager
+```
 
-Step 5 sweeps up whatever is left, matching on the `Project` tag. It doesn't depend on the driver still being alive. This has caught volumes on every teardown so far.
-
-**Step 6 — a leftover webhook leaks data.**
-
-The Jenkins EC2's public IP goes back to AWS's pool and gets reassigned to another customer. A webhook left pointing at it would keep posting this repo's push payloads — commit messages, author names, email addresses — to a stranger's server.
-
-</details>
-
-See `destroy.sh` for the implementation.
+Every resource carries that tag, including the two Kubernetes creates: the load
+balancer is tagged through a Service annotation, and the EBS volumes through
+the StorageClass. An empty result means the account is clean. It finds only
+tagged resources, so it is a net rather than a proof.
 
 ---
 
@@ -298,7 +297,7 @@ Both webhooks are Terraform resources (`terraform/github.tf`) pointing at DNS na
 
 ```bash
 cd terraform && terraform init && terraform apply   # up
-./destroy.sh                                        # down, from the project root
+terraform destroy                                   # down
 ```
 
 One `terraform apply` builds everything, including DNS, the certificate, both GitHub webhooks and the first CI build. The app is live about ten minutes after it finishes, once that build has pushed images and ArgoCD has synced them.

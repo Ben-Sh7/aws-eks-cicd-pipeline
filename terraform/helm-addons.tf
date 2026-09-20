@@ -208,14 +208,21 @@ resource "helm_release" "external_secrets" {
   ]
 }
 
+resource "kubernetes_namespace" "monitoring" {
+  metadata {
+    name = "monitoring"
+  }
+
+  depends_on = [kubernetes_storage_class.gp3_tagged]
+}
+
 resource "helm_release" "kube_prometheus_stack" {
-  name             = "kube-prometheus-stack"
-  repository       = "https://prometheus-community.github.io/helm-charts"
-  chart            = "kube-prometheus-stack"
-  version          = var.kube_prometheus_stack_chart_version
-  namespace        = "monitoring"
-  create_namespace = true
-  timeout          = 600
+  name       = "kube-prometheus-stack"
+  repository = "https://prometheus-community.github.io/helm-charts"
+  chart      = "kube-prometheus-stack"
+  version    = var.kube_prometheus_stack_chart_version
+  namespace  = kubernetes_namespace.monitoring.metadata[0].name
+  timeout    = 600
 
   values = [yamlencode(local.monitoring_values)]
 
@@ -307,9 +314,8 @@ resource "helm_release" "argocd" {
         apiVersion = "argoproj.io/v1alpha1"
         kind       = "Application"
         metadata = {
-          name       = "task-manager"
-          namespace  = "argocd"
-          finalizers = ["resources-finalizer.argocd.argoproj.io"]
+          name      = "task-manager"
+          namespace = "argocd"
         }
         spec = {
           project = "default"

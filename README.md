@@ -14,7 +14,7 @@ See **[HLD.md](HLD.md)** — diagrams, security design, and the reasoning behind
 
 ## Quick Start
 
-**You need:** `terraform`, the `aws` CLI, AWS credentials, and a domain in a Route53 hosted zone. *(Those two tools are all the deployment itself uses. `kubectl` and `helm` are for looking at the cluster afterwards, and for `destroy.sh`.)*
+**You need:** `terraform`, the `aws` CLI, AWS credentials, and a domain in a Route53 hosted zone. *(Those two are all the deployment uses. `kubectl` is for looking at the cluster afterwards.)*
 
 There is no configuration file to fill in and nothing secret on your machine. Everything this deployment needs to know — the domain, the repository, the GitHub token, the Slack and Google credentials — lives in **AWS Secrets Manager**, created once and read at plan time.
 
@@ -66,14 +66,22 @@ terraform init
 terraform plan
 terraform apply          # ~25 min
 
-./destroy.sh             # from the project root - tears it all down
+terraform destroy        # tears it all down
 ```
 
 That is the whole deployment. One command builds the network, the cluster, the database, CI, CD, monitoring, DNS and the certificate, registers both GitHub webhooks, and starts the first Jenkins build — because the image registry is empty on a fresh build and nothing else would trigger one. About ten minutes later the app is live at `https://app.<your domain>`.
 
 `terraform output` prints every address and the command to look up each password.
 
-> `.env` has nothing to do with any of this. It is for [local development](#local-development) only — `docker compose` on your own machine. The deployment never reads it.
+Afterwards, to confirm the account is clean:
+
+```bash
+aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=task-manager
+```
+
+Everything carries that tag, including the load balancer and the EBS volumes Kubernetes creates. An empty result means nothing was left behind.
+
+> Running the stack on your own machine is a separate thing entirely — see [Working on the code](#working-on-the-code). The deployment reads nothing from your disk.
 
 ### Rotating what Terraform generates
 
@@ -81,9 +89,8 @@ The JWT signing key and the Jenkins and Grafana admin passwords are generated du
 
 To roll all three, increment one number:
 
-```hcl
-# terraform/terraform.tfvars
-generated_secret_version = 2
+```bash
+terraform apply -var="generated_secret_version=2"
 ```
 
 The app and Grafana pick the new value up from External Secrets within the hour, or immediately on pod restart; Jenkins applies its new password on its next boot. Rotating the JWT key signs everyone out, by design.
