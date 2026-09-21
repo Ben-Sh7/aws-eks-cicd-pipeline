@@ -68,6 +68,9 @@ secrets:
   awsRegion: us-east-1
   awsSecretName: ""
   jwtSecretName: ""
+  # Login the app connects to Postgres with. The db-bootstrap job creates the
+  # role from the master credentials; the pods never see the master password.
+  appDbSecretName: ""
   # Holds GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET as one JSON document.
   # Empty switches Google sign-in off entirely - the app then offers username +
   # password accounts only, and nothing in the chart references the credential.
@@ -76,6 +79,27 @@ secrets:
   dbUser: ""
   dbPassword: ""
   jwtSecret: ""
+
+# Locks the namespace down to the one path the app needs: ingress-nginx may
+# reach the frontend, the frontend may reach the backend, and only the backend
+# may reach the database. Needs a CNI that enforces policies - Terraform turns
+# that on in the EKS vpc-cni addon. Turn it off for a local install whose CNI
+# ignores them, where it would give a false sense of isolation.
+networkPolicy:
+  enabled: true
+
+# One-shot job that creates the application's Postgres role and hands it the
+# app's own tables. Runs before the deployments on every sync, and is a no-op
+# once the role exists and its password is unchanged.
+dbBootstrap:
+  image: postgres:16-alpine
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
 
 ingress:
   enabled: true
