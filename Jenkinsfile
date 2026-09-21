@@ -6,7 +6,6 @@ pipeline {
         AWS_REGION = 'us-east-1'
         BACKEND_REPO = 'devops-task-manager-backend'
         FRONTEND_REPO = 'devops-task-manager-frontend'
-        VERSION = "1.0.${BUILD_NUMBER}"
         GITOPS_VALUES_FILE = 'gitops/task-manager/values-images.yaml'
         GITOPS_REPO_URL = 'github.com/Ben-Sh7/aws-eks-cicd-pipeline.git'
         CI_BOT_NAME = 'jenkins-ci-bot'
@@ -17,7 +16,10 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                echo "Repository checked out successfully"
+                script {
+                    env.VERSION = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                    echo "Repository checked out at ${env.VERSION}"
+                }
             }
         }
 
@@ -44,25 +46,35 @@ pipeline {
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Guard: skip commits already in ECR') {
             when { expression { env.SKIP_BUILD != 'true' } }
             steps {
                 script {
-                    echo "Building Docker images with tag: ${VERSION}"
+                    def backend = sh(script: "aws ecr describe-images --repository-name ${BACKEND_REPO} --image-ids imageTag=${env.VERSION} --region ${AWS_REGION} > /dev/null 2>&1", returnStatus: true)
+                    def frontend = sh(script: "aws ecr describe-images --repository-name ${FRONTEND_REPO} --image-ids imageTag=${env.VERSION} --region ${AWS_REGION} > /dev/null 2>&1", returnStatus: true)
+                    env.IMAGE_EXISTS = (backend == 0 && frontend == 0) ? 'true' : 'false'
+                    if (env.IMAGE_EXISTS == 'true') {
+                        echo "${env.VERSION} is already in ECR - reusing it instead of rebuilding."
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
+            steps {
+                script {
+                    echo "Building Docker images with tag: ${env.VERSION}"
                     sh '''
                         docker build -t ${BACKEND_REPO}:${VERSION} ./app/backend
                         docker build -t ${FRONTEND_REPO}:${VERSION} ./app/frontend
-                        docker tag ${BACKEND_REPO}:${VERSION} ${BACKEND_REPO}:latest
-                        docker tag ${BACKEND_REPO}:${VERSION} ${BACKEND_REPO}:v1
-                        docker tag ${FRONTEND_REPO}:${VERSION} ${FRONTEND_REPO}:latest
-                        docker tag ${FRONTEND_REPO}:${VERSION} ${FRONTEND_REPO}:v1
                     '''
                 }
             }
         }
 
         stage('Scan Images for CVEs (Trivy)') {
-            when { expression { env.SKIP_BUILD != 'true' } }
+            when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
             steps {
                 script {
                     echo "Scanning images for HIGH/CRITICAL CVEs - fails the build before anything reaches ECR"
@@ -75,7 +87,7 @@ pipeline {
         }
 
         stage('Login to AWS ECR') {
-            when { expression { env.SKIP_BUILD != 'true' } }
+            when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
             steps {
                 script {
                     echo "Logging in to AWS ECR"
@@ -87,24 +99,16 @@ pipeline {
         }
 
         stage('Push to ECR') {
-            when { expression { env.SKIP_BUILD != 'true' } }
+            when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
             steps {
                 script {
-                    echo "Pushing images to ECR with tags: ${VERSION}, latest, v1"
+                    echo "Pushing images to ECR with tag: ${env.VERSION}"
                     sh '''
                         docker tag ${BACKEND_REPO}:${VERSION} ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
-                        docker tag ${BACKEND_REPO}:latest ${ECR_REGISTRY}/${BACKEND_REPO}:latest
-                        docker tag ${BACKEND_REPO}:v1 ${ECR_REGISTRY}/${BACKEND_REPO}:v1
                         docker push ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
-                        docker push ${ECR_REGISTRY}/${BACKEND_REPO}:latest
-                        docker push ${ECR_REGISTRY}/${BACKEND_REPO}:v1
 
                         docker tag ${FRONTEND_REPO}:${VERSION} ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
-                        docker tag ${FRONTEND_REPO}:latest ${ECR_REGISTRY}/${FRONTEND_REPO}:latest
-                        docker tag ${FRONTEND_REPO}:v1 ${ECR_REGISTRY}/${FRONTEND_REPO}:v1
                         docker push ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
-                        docker push ${ECR_REGISTRY}/${FRONTEND_REPO}:latest
-                        docker push ${ECR_REGISTRY}/${FRONTEND_REPO}:v1
                     '''
                 }
             }
@@ -114,7 +118,7 @@ pipeline {
             when { expression { env.SKIP_BUILD != 'true' } }
             steps {
                 script {
-                    echo "Bumping ${GITOPS_VALUES_FILE} to ${VERSION} and pushing - this is what triggers ArgoCD to deploy"
+                    echo "Bumping ${GITOPS_VALUES_FILE} to ${env.VERSION} and pushing - this is what triggers ArgoCD to deploy"
                     withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                         sh '''
                             cat > ${GITOPS_VALUES_FILE} << YAML
@@ -130,8 +134,13 @@ YAML
                             git config user.name "${CI_BOT_NAME}"
                             git config user.email "${CI_BOT_EMAIL}"
                             git add ${GITOPS_VALUES_FILE}
-                            git commit -m "ci: deploy ${VERSION}"
-                            git push https://${GIT_USER}:${GIT_TOKEN}@${GITOPS_REPO_URL} HEAD:main
+
+                            if git diff --cached --quiet; then
+                                echo "${GITOPS_VALUES_FILE} already points at ${VERSION} - nothing to deploy."
+                            else
+                                git commit -m "ci: deploy ${VERSION}"
+                                git push https://${GIT_USER}:${GIT_TOKEN}@${GITOPS_REPO_URL} HEAD:main
+                            fi
                         '''
                     }
                 }
@@ -144,7 +153,6 @@ YAML
             echo "Pipeline executed successfully!"
             echo "Backend image: ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}"
             echo "Frontend image: ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}"
-            echo "Tags: ${VERSION}, latest, v1"
             echo "ArgoCD will pick up the values-images.yaml change and deploy it automatically."
         }
         failure {
