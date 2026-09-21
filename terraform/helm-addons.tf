@@ -345,6 +345,7 @@ resource "helm_release" "argocd_app" {
               { name = "secrets.awsRegion", value = var.aws_region },
               { name = "secrets.awsSecretName", value = aws_db_instance.postgres.master_user_secret[0].secret_arn },
               { name = "secrets.jwtSecretName", value = aws_secretsmanager_secret.jwt_secret.name },
+              { name = "secrets.appDbSecretName", value = aws_secretsmanager_secret.app_db_user.name },
               { name = "secrets.googleSecretName", value = data.aws_secretsmanager_secret.app.name },
               { name = "backend.image.repository", value = aws_ecr_repository.backend.repository_url },
               { name = "frontend.image.repository", value = aws_ecr_repository.frontend.repository_url },

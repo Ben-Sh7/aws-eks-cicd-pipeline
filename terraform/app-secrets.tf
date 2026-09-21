@@ -16,3 +16,26 @@ resource "aws_secretsmanager_secret_version" "jwt_secret" {
   secret_string_wo_version = var.generated_secret_version
 }
 
+
+ephemeral "aws_secretsmanager_random_password" "app_db_user" {
+  password_length     = 40
+  exclude_punctuation = true
+}
+
+resource "aws_secretsmanager_secret" "app_db_user" {
+  name_prefix             = "${local.project_name}/app-db-user-"
+  description             = "Login the application connects to Postgres with. It owns its own tables and holds no other rights; the master user stays out of the pods."
+  recovery_window_in_days = 0
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "app_db_user" {
+  secret_id = aws_secretsmanager_secret.app_db_user.id
+
+  secret_string_wo = jsonencode({
+    username = var.app_db_username
+    password = ephemeral.aws_secretsmanager_random_password.app_db_user.random_password
+  })
+
+  secret_string_wo_version = var.generated_secret_version
+}
