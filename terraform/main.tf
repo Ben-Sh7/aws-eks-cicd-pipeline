@@ -354,6 +354,24 @@ resource "aws_eks_cluster" "main" {
 resource "aws_launch_template" "eks_nodes" {
   name_prefix = "${local.project_name}-nodes-"
 
+  user_data = base64encode(<<-EOT
+    MIME-Version: 1.0
+    Content-Type: multipart/mixed; boundary="//"
+
+    --//
+    Content-Type: application/node.eks.aws
+
+    apiVersion: node.eks.aws/v1alpha1
+    kind: NodeConfig
+    spec:
+      kubelet:
+        config:
+          maxPods: ${var.node_max_pods}
+
+    --//--
+  EOT
+  )
+
   tag_specifications {
     resource_type = "instance"
     tags = merge(
