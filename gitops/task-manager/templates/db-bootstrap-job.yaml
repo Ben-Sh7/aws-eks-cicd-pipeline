@@ -1,0 +1,90 @@
+{{- if eq .Values.secrets.mode "externalSecrets" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-bootstrap
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app: db-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+      containers:
+        - name: psql
+          image: {{ .Values.dbBootstrap.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.dbBootstrap.resources | nindent 12 }}
+          env:
+            - name: HOME
+              value: /tmp
+            - name: PGHOST
+              value: {{ required "config.dbHost is required (Terraform passes it as an ArgoCD helm parameter)" .Values.config.dbHost | quote }}
+            - name: PGPORT
+              value: {{ .Values.config.dbPort | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.config.dbName | quote }}
+            - name: PGSSLMODE
+              value: require
+            - name: PGCONNECT_TIMEOUT
+              value: "10"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: db-admin-secret
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-admin-secret
+                  key: password
+            - name: APP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: DB_USER
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: DB_PASSWORD
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              psql -v ON_ERROR_STOP=1 -v user="$APP_USER" -v pw="$APP_PASSWORD" -v db="$PGDATABASE" <<'SQL'
+              SELECT format('CREATE ROLE %I LOGIN', :'user')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'user')
+              \gexec
+
+              ALTER ROLE :"user" WITH LOGIN PASSWORD :'pw';
+              ALTER ROLE :"user" WITH NOCREATEDB NOCREATEROLE NOSUPERUSER NOREPLICATION NOBYPASSRLS;
+
+              GRANT CONNECT ON DATABASE :"db" TO :"user";
+              GRANT USAGE, CREATE ON SCHEMA public TO :"user";
+
+              SELECT format('ALTER TABLE public.%I OWNER TO %I', tablename, :'user')
+              FROM pg_tables WHERE schemaname = 'public'
+              \gexec
+
+              SELECT format('ALTER SEQUENCE public.%I OWNER TO %I', sequencename, :'user')
+              FROM pg_sequences WHERE schemaname = 'public'
+              \gexec
+              SQL
+              echo "role $APP_USER is ready"
+{{- end }}

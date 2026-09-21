@@ -89,9 +89,13 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
 
-  skip_final_snapshot     = true
-  backup_retention_period = 0
-  deletion_protection     = false
+  skip_final_snapshot = true
+  deletion_protection = false
+
+  backup_retention_period = var.rds_backup_retention_days
+  backup_window           = "03:00-04:00"
+  maintenance_window      = "sun:04:30-sun:05:30"
+  copy_tags_to_snapshot   = true
 
   auto_minor_version_upgrade = true
 
