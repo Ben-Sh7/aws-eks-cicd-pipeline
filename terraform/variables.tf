@@ -76,6 +76,18 @@ variable "rds_username" {
   default     = "postgres"
 }
 
+variable "rds_backup_retention_days" {
+  description = "Days of automated RDS backups. Automated backups are deleted together with the instance, so this leaves nothing behind after a destroy. 0 turns them off."
+  type        = number
+  default     = 7
+}
+
+variable "app_db_username" {
+  description = "Postgres role the application logs in as. Created on first sync by a job inside the cluster, because the database is private and Terraform cannot reach it."
+  type        = string
+  default     = "app_user"
+}
+
 variable "kubernetes_version" {
   description = "Kubernetes version for EKS cluster"
   type        = string
