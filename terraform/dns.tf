@@ -10,8 +10,10 @@ data "aws_route53_zone" "main" {
   }
 }
 
+data "aws_elb_hosted_zone_id" "main" {}
+
 locals {
-  app_fqdn     = "${var.app_subdomain}.${local.domain_name}"
+  app_fqdn     = var.app_subdomain == "" ? local.domain_name : "${var.app_subdomain}.${local.domain_name}"
   argocd_fqdn  = "${var.argocd_subdomain}.${local.domain_name}"
   jenkins_fqdn = "${var.jenkins_subdomain}.${local.domain_name}"
 
@@ -72,17 +74,25 @@ locals {
 resource "aws_route53_record" "app" {
   zone_id = data.aws_route53_zone.main.zone_id
   name    = local.app_fqdn
-  type    = "CNAME"
-  ttl     = 60
-  records = [local.ingress_lb_hostname]
+  type    = "A"
+
+  alias {
+    name                   = local.ingress_lb_hostname
+    zone_id                = data.aws_elb_hosted_zone_id.main.id
+    evaluate_target_health = false
+  }
 }
 
 resource "aws_route53_record" "argocd" {
   zone_id = data.aws_route53_zone.main.zone_id
   name    = local.argocd_fqdn
-  type    = "CNAME"
-  ttl     = 60
-  records = [local.ingress_lb_hostname]
+  type    = "A"
+
+  alias {
+    name                   = local.ingress_lb_hostname
+    zone_id                = data.aws_elb_hosted_zone_id.main.id
+    evaluate_target_health = false
+  }
 }
 
 resource "aws_route53_record" "jenkins" {
