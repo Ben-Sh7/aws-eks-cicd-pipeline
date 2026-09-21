@@ -1,7 +1,7 @@
 # Managed by Jenkins CI - do not hand-edit. ArgoCD deploys whatever tag is here.
 backend:
   image:
-    tag: "0c8d629"
+    tag: "beca421"
 frontend:
   image:
-    tag: "0c8d629"
+    tag: "beca421"
