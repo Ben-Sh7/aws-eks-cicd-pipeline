@@ -90,7 +90,7 @@ That credential belongs to a Google project, not to this infrastructure, so Terr
 
 ## Key flows
 
-**CI** — push → build → Trivy scan → push to ECR → bump the tag file → commit
+**CI** — push → build → Trivy scan → push to ECR under the commit's own tag → bump the tag file → commit
 
 **CD** — webhook → merge the values files → sync the chart → Kubernetes rolls out
 
@@ -109,6 +109,25 @@ Two consequences:
 - A `kubectl edit` against the cluster matches no commit at all. `selfHeal` reverts it.
 
 It acts on the difference, not on a file changing.
+
+</details>
+
+<details>
+<summary>Why images are tagged with the commit, not a build number</summary>
+
+<br>
+
+A tag is `1a2b3c4`, the short hash of the commit it was built from. A build counter cannot
+work here: `terraform destroy` takes Jenkins and its history with it, so the next cycle
+starts at 1 and hands out tags that already mean a different commit. That is what broke the
+first build after a rebuild.
+
+Unique tags let the repositories be `IMMUTABLE`. A tag can never be repointed, so a running
+image is provably the one Trivy scanned. `latest` and `v1` go with them — nothing consumed
+them, and a moving tag cannot exist in such a repository.
+
+Building the same commit twice is then a no-op rather than a failure: the pipeline reuses the
+image ECR already has, and leaves the tag file alone when it already names that commit.
 
 </details>
 

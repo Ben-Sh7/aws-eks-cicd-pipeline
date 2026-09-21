@@ -22,7 +22,7 @@ spec:
         runAsUser: 1000
       containers:
       - name: frontend
-        image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+        image: "{{ .Values.frontend.image.repository }}:{{ required "frontend.image.tag is required: Jenkins writes the commit it built into values-images.yaml" .Values.frontend.image.tag }}"
         imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
         securityContext:
           allowPrivilegeEscalation: false

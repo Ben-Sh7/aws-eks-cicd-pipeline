@@ -467,7 +467,7 @@ data "aws_ami" "ubuntu" {
 
 resource "aws_ecr_repository" "backend" {
   name                 = local.ecr_backend_repo_name
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   force_delete         = true
   image_scanning_configuration {
     scan_on_push = true
@@ -481,7 +481,7 @@ resource "aws_ecr_repository" "backend" {
 
 resource "aws_ecr_repository" "frontend" {
   name                 = local.ecr_frontend_repo_name
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   force_delete         = true
   image_scanning_configuration {
     scan_on_push = true

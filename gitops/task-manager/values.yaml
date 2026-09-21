@@ -8,7 +8,7 @@
 backend:
   image:
     repository: ""
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 3
   port: 3001
@@ -23,7 +23,7 @@ backend:
 frontend:
   image:
     repository: ""
-    tag: latest
+    tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 1
   port: 3000
