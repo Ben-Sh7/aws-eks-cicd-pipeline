@@ -6,6 +6,9 @@ resource "aws_eks_addon" "vpc_cni" {
 
   configuration_values = jsonencode({
     enableNetworkPolicy = "true"
+    env = {
+      NETWORK_POLICY_ENFORCING_MODE = "strict"
+    }
   })
 
   tags = local.common_tags
