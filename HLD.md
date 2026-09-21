@@ -74,13 +74,13 @@ Browser → ingress → frontend → backend → database. Nothing skips a step.
 
 ### Google sign-in
 
-Google only returns users to an **HTTPS** address on a **fixed domain**, so both used to be blockers. The domain is now an input to the infrastructure rather than something it discovers afterwards, and TLS terminates on the load balancer with an ACM certificate, so the only thing left is the credential itself.
+Google only returns users to an **HTTPS** address on a **fixed domain**. The domain is an input to the infrastructure, and TLS terminates on the load balancer with an ACM certificate, so the only thing left is the credential itself.
 
 That credential belongs to a Google project, not to this infrastructure, so Terraform never holds it. It sits in the Secrets Manager entry maintained by hand, and Terraform only passes that entry's name to the chart:
 
 | Step | Why |
 |---|---|
-| `https://app.<domain>/api/auth/callback` registered on the Google OAuth client | Google only returns users to registered addresses |
+| `https://<domain>/api/auth/callback` registered on the Google OAuth client | Google only returns users to registered addresses |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in the credentials entry | The value reaches AWS without passing through Terraform, Git, or a local file |
 | External Secrets syncs both into the cluster | Same path as every other secret |
 
@@ -138,13 +138,11 @@ image ECR already has, and leaves the tag file alone when it already names that 
 
 Several values can't live in Git: the RDS endpoint, the names of the RDS master secret, the JWT secret and the Google credential, the two ECR registry URLs, and the app's own address. They embed account-specific data or are generated during the apply.
 
-Terraform creates the ArgoCD `Application` itself — it travels with the ArgoCD Helm release, which puts it after the CRDs that define its kind — and passes all of them in as Helm parameters. They are ordinary Terraform references, so a mistake is a plan-time error rather than something that surfaces as a broken app.
+Terraform creates the ArgoCD `Application` itself, from the `argocd-apps` chart in a release of its own, and passes all of them in as Helm parameters. They are ordinary Terraform references, so a mistake is a plan-time error rather than something that surfaces as a broken app.
 
-The app's address is the one that used to be awkward: it was the ingress Load Balancer's generated DNS name, known only after the cluster was up and different on every rebuild, and the frontend needs it as `APP_URL` to reject cross-site requests. With a domain it is decided before anything is built, and the load balancer's hostname is just the target of a CNAME.
+The app's address is the awkward one: the frontend needs it as `APP_URL` to reject cross-site requests, and without a domain it would be the load balancer's generated DNS name, known only after the cluster is up and different on every rebuild. With a domain it is decided before anything is built, and the load balancer's hostname is only what the ALIAS record points at.
 
-The chart refuses to render if the JWT secret name or the app address is missing, so a gap shows up as a clear sync error rather than a broken app.
-
-The chart itself stays generic. Deploying into a different AWS account needs no edit to it.
+The chart refuses to render if any of them is missing, so a gap is a clear sync error rather than a broken app. Nothing in it is account-specific, so another account needs no edit to it.
 
 </details>
 
@@ -191,7 +189,7 @@ Three things are silenced on purpose:
 | | |
 |---|---|
 | Worker nodes | Private subnets, no public IP. Egress via NAT, except in-region S3 (gateway endpoint) |
-| App | HTTP through the ingress Load Balancer. The backend is `ClusterIP` only |
+| App | HTTPS only - the load balancer terminates TLS, and nginx redirects port 80. The backend is `ClusterIP` only |
 | Jenkins :8080 | Your IP + GitHub's webhook ranges. Nothing else |
 | Jenkins SSH | **None.** Access is through SSM Session Manager |
 | Grafana | ClusterIP. `port-forward` only |
@@ -215,7 +213,7 @@ Three things are silenced on purpose:
 
 **Trivy gates the build.** HIGH and CRITICAL CVEs fail it before anything reaches ECR.
 
-Trivy itself is pinned to a fixed version and checksum-verified, not pulled from a floating `latest`. Its own release pipeline was compromised twice in 2026 via poisoned releases.
+Trivy itself is pinned to a fixed version rather than pulled from a floating `latest`, and its tarball is checked against the published SHA-256 before it is installed. The bootstrap runs under `set -eo pipefail`, so a mismatch aborts it instead of leaving the build to scan with an unverified binary.
 
 **Runtime images** run a current Node LTS with `npm` removed from the final stage. npm's bundled dependencies were the last HIGH findings standing between the image and a clean scan. The compiled code is owned by root, so the process cannot modify it.
 
@@ -270,13 +268,11 @@ Decisions that are not obvious from reading the code, and that something depends
 | ingress-nginx service: `targetPorts.https = http` | TLS terminates on the load balancer, so the controller receives plain HTTP on both ports. Without this it expects a second TLS handshake on 443 and every request fails |
 | ingress-nginx config: `use-forwarded-headers` | With TLS terminated upstream, `X-Forwarded-Proto` is the only way nginx can tell HTTP from HTTPS - and the only way a redirect-to-HTTPS rule avoids looping |
 | The four Helm releases are chained with `depends_on` | The provider shares one repository cache across resources; installing them in parallel makes all but one fail with "no cached repo found" on a cold cache. external-secrets also has to precede monitoring, whose release ships an ExternalSecret |
-| The ArgoCD Application rides in the argo-cd release's `extraObjects` | Helm installs a chart's CRDs before its templates, so the Application kind exists when the object is created. A standalone `kubernetes_manifest` is evaluated at plan time and fails on a from-scratch apply |
+| The ArgoCD Application comes from the `argocd-apps` chart, in a release ordered after argo-cd | A chart cannot create a custom resource whose CRD it installs in that same release: Helm validates the whole manifest against the cluster before installing anything, so the kind does not exist yet. A `kubernetes_manifest` does not work either - it is evaluated at plan time, before the cluster exists |
 | Kubernetes/Helm providers authenticate through `aws eks get-token`, not `aws_eks_cluster_auth` | That data source resolves once per plan and is stored in state, so the next run configures the provider with a token minted hours earlier. EKS tokens live 15 minutes |
 | No SSH rule on the Jenkins security group | The instance is reached through SSM Session Manager, which needs no inbound port. Port 22 open on a host holding the GitHub token and ECR push rights was the largest hole here |
 | `aws_route53_record.cert_validation` sets `allow_overwrite` | A stale validation record from a previous certificate in the same zone would otherwise block the apply |
 | Grafana's admin login comes from an ExternalSecret, not a Helm value | A Helm value is an argument of the release resource and would be recorded in state, undoing the write-only argument that generated it |
-| kubeScheduler, kubeControllerManager and kubeEtcd are disabled in kube-prometheus-stack | EKS runs them on AWS's side where nothing can scrape them, so their rules would fire "down" forever. An alert that is always firing teaches you to ignore the channel |
-| ECR repository names do not follow `project_name` | Those repositories already hold image history and must not be recreated |
 
 ---
 
@@ -294,7 +290,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | Alertmanager storage is `emptyDir` | Silences are lost on a pod restart. A ~1Gi PVC fixes it |
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
 | No app-specific alerts | Current rules catch a crashed pod, not a backend returning 500s |
-| ECR names don't match `project_name` | Intentional — those repos already hold image history |
+| ECR repository names are fixed strings, not derived from `project_name` | The Jenkinsfile names the same repositories, and nothing passes the Terraform value to it. Renaming the project means editing both |
 
 ---
 
@@ -327,9 +323,9 @@ There is no configuration file and no environment to set up. Three Secrets Manag
 
 ### State
 
-State is not a byproduct. It is the only record of what exists in the account, and it contains secrets, so it lives in S3 rather than next to the code: KMS-encrypted with a customer-managed key, versioned so a corrupted state is a restore rather than a rebuild, locked (S3 conditional writes - no DynamoDB table needed since Terraform 1.10) so two applies cannot overwrite each other, and with a bucket policy refusing anything that is not TLS. `terraform/bootstrap/` creates it; that configuration is the one place a local state file is acceptable, because it holds a bucket and a key and nothing else.
+The state is the only record of what exists in the account, and it contains secrets, so it lives in S3 rather than next to the code: KMS-encrypted with a customer-managed key, versioned so a corrupted state is a restore rather than a rebuild, locked (S3 conditional writes - no DynamoDB table needed since Terraform 1.10) so two applies cannot overwrite each other, and with a bucket policy refusing anything that is not TLS. `terraform/bootstrap/` creates it; that configuration is the one place a local state file is acceptable, because it holds a bucket and a key and nothing else.
 
-What is *in* the state is then a deliberate, short list. Secrets fall into three groups:
+Secrets fall into three groups:
 
 | | Where the value lives | How |
 |---|---|---|
@@ -337,8 +333,4 @@ What is *in* the state is then a deliberate, short list. Secrets fall into three
 | JWT key, Jenkins + Grafana admin | AWS only | Generated by an `ephemeral` resource and written with `secret_string_wo`, a write-only argument: sent to AWS, never recorded |
 | Two webhook signing secrets | State (encrypted) | Terraform must hand the *same* value to GitHub and to the receiver, and both are ordinary resource arguments, which an ephemeral value may not reach |
 
-The third row is the honest one. Zero secrets in state is not achievable when Terraform's job is to make two systems agree on a shared secret - which is why the professional answer is to protect state rather than to pretend it can be emptied.
-
 Rotation of the second group is a single counter, `generated_secret_version`; incrementing it rewrites all three with fresh values.
-
-Teardown keeps a script, because it is the asymmetric half: the load balancer and the EBS volumes are created by Kubernetes rather than by Terraform, so nothing in the state file knows they have to go first.
