@@ -214,18 +214,20 @@ Trivy itself is pinned to a fixed version and checksum-verified, not pulled from
 terraform destroy
 ```
 
-Nothing else. The dependency graph already orders it correctly: the Helm
-releases go first, then the node group (~5 min), then the cluster (~10 min),
-and only then the subnets and the VPC. By the time anything touches the
-network, the load balancer Kubernetes created has been gone for a quarter of
-an hour - which is why no wait, retry or sweep is needed between them.
+Nothing else. For the network half, the dependency graph already orders it
+correctly: the Helm releases go first, then the node group (~5 min), then the
+cluster (~10 min), and only then the subnets and the VPC. By the time anything
+touches the network, the load balancer Kubernetes created has been gone for a
+quarter of an hour, so no wait or retry belongs between them. A destroy run on
+2026-09-21 confirmed it: 75 resources, no DependencyViolation.
 
-Two things had to be arranged for that to hold:
+Three things had to be arranged for the rest to hold:
 
 | | |
 |---|---|
 | The ArgoCD `Application` carries **no finalizer** | Helm deletes the Application and the ArgoCD controller in the same uninstall. A finalizer would wait for a controller that is already going, and hang until the timeout. Nothing is lost by dropping it: the app owns only ClusterIP Services, Deployments and an Ingress - no cloud resources |
-| The `monitoring` namespace is a **Terraform resource**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the Prometheus and Grafana PVCs live in it - their EBS volumes would survive the cluster and keep billing. Deleting the namespace deletes the PVCs, and Terraform waits for that deletion to finish, which cannot happen until the volumes are actually released. The other three namespaces have no PVCs and need no such handling |
+| The `monitoring` namespace is a **Terraform resource**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the Prometheus and Grafana PVCs live in it. Deleting the namespace deletes the PVCs. The other three namespaces have no PVCs and need no such handling |
+| A 90-second `time_sleep` sits between that namespace and the EBS CSI driver | Deleting a PVC is not the end of it. The PersistentVolume behind it is cluster-scoped, so it outlives the namespace, and the CSI driver deletes the EBS volume asynchronously afterwards - with nothing waiting on it. The first destroy run tore the driver down nine seconds after the namespace and left two volumes, 15 GB, unattached and billing. This is the one place in the teardown where a fixed wait is the right answer: the work is happening inside Kubernetes, where the dependency graph cannot see it |
 
 To confirm nothing was left behind:
 
