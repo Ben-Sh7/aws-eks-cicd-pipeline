@@ -179,9 +179,9 @@ variable "slack_channel" {
 }
 
 variable "app_subdomain" {
-  description = "Subdomain the app is served on. This is the address users open and the only origin the frontend accepts sign-ins from."
+  description = "Subdomain the app is served on, or \"\" to serve it on the domain itself. This is the address users open and the only origin the frontend accepts sign-ins from. The zone apex cannot hold a CNAME, which is why every record here is an ALIAS."
   type        = string
-  default     = "app"
+  default     = ""
 }
 
 variable "argocd_subdomain" {
