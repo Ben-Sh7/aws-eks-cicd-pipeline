@@ -88,6 +88,12 @@ secrets:
 networkPolicy:
   enabled: true
 
+# Alerts on the app itself, evaluated by the Prometheus that Terraform installs.
+# They read kube-state-metrics and the ingress controller rather than the app,
+# so they need nothing from the image.
+prometheusRule:
+  enabled: true
+
 # One-shot job that creates the application's Postgres role and hands it the
 # app's own tables. Runs before the deployments on every sync, and is a no-op
 # once the role exists and its password is unchanged.

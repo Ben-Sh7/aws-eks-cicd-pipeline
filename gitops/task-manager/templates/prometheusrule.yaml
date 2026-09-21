@@ -1,0 +1,75 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: task-manager
+  labels:
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: task-manager.availability
+      rules:
+        - alert: TaskManagerBackendUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="{{ .Release.Namespace }}",deployment="backend-deploy"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: No backend replica is serving
+            description: Every backend pod has been unavailable for five minutes. The site cannot answer an API call.
+
+        - alert: TaskManagerFrontendUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="{{ .Release.Namespace }}",deployment="frontend-deploy"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: No frontend replica is serving
+            description: Every frontend pod has been unavailable for five minutes. The site is down.
+
+        - alert: TaskManagerDegraded
+          expr: |
+            kube_deployment_status_replicas_available{namespace="{{ .Release.Namespace }}",deployment="backend-deploy"}
+              < kube_deployment_spec_replicas{namespace="{{ .Release.Namespace }}",deployment="backend-deploy"}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: The backend is running below its replica count
+            description: A rollout that has not finished in fifteen minutes is a rollout that is stuck.
+
+    - name: task-manager.stability
+      rules:
+        - alert: TaskManagerPodRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}",container=~"backend|frontend"}[15m]) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{`{{ $labels.pod }}`}} keeps restarting"
+            description: More than two restarts in fifteen minutes. A crash loop looks healthy in a replica count but is not.
+
+    - name: task-manager.traffic
+      rules:
+        - alert: TaskManagerHighErrorRate
+          expr: |
+            sum(rate(nginx_ingress_controller_requests{host="{{ .Values.ingress.host }}",status=~"5.."}[5m]))
+              /
+            sum(rate(nginx_ingress_controller_requests{host="{{ .Values.ingress.host }}"}[5m]))
+              > 0.05
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: More than 5% of requests are failing
+            description: The pods are up and answering with errors, which no replica count shows.
+
+        - alert: TaskManagerNoTraffic
+          expr: sum(rate(nginx_ingress_controller_requests{host="{{ .Values.ingress.host }}"}[15m])) == 0
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: No request has reached the site in thirty minutes
+            description: Either nobody is using it or nobody can. Worth one look.
+{{- end }}

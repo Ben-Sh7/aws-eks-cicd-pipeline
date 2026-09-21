@@ -1,6 +1,8 @@
 locals {
-  monitoring_secretstore    = "monitoring-secretstore"
-  grafana_admin_secret      = "grafana-admin"
+  monitoring_secretstore   = "monitoring-secretstore"
+  grafana_admin_secret     = "grafana-admin"
+  argocd_metric_components = ["controller", "server", "repoServer", "applicationSet", "notifications"]
+
   alertmanager_slack_secret = "alertmanager-slack"
   alertmanager_slack_key    = "url"
 
@@ -178,6 +180,13 @@ resource "helm_release" "ingress_nginx" {
       config = {
         use-forwarded-headers = "true"
       }
+
+      metrics = {
+        enabled = true
+        serviceMonitor = {
+          enabled = true
+        }
+      }
     }
   })]
 
@@ -199,6 +208,11 @@ resource "helm_release" "external_secrets" {
   set {
     name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
     value = aws_iam_role.external_secrets.arn
+  }
+
+  set {
+    name  = "serviceMonitor.enabled"
+    value = "true"
   }
 
   depends_on = [
@@ -272,6 +286,36 @@ resource "helm_release" "kube_prometheus_stack" {
   }
 
   set {
+    name  = "prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues"
+    value = "false"
+  }
+
+  set {
+    name  = "prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues"
+    value = "false"
+  }
+
+  set {
+    name  = "prometheus.prometheusSpec.ruleSelectorNilUsesHelmValues"
+    value = "false"
+  }
+
+  set {
+    name  = "alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.storageClassName"
+    value = kubernetes_storage_class.gp3_tagged.metadata[0].name
+  }
+
+  set {
+    name  = "alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.accessModes[0]"
+    value = "ReadWriteOnce"
+  }
+
+  set {
+    name  = "alertmanager.alertmanagerSpec.storage.volumeClaimTemplate.spec.resources.requests.storage"
+    value = var.alertmanager_storage_size
+  }
+
+  set {
     name  = "kubeScheduler.enabled"
     value = "false"
   }
@@ -311,6 +355,22 @@ resource "helm_release" "argocd" {
   set_sensitive {
     name  = "configs.secret.githubSecret"
     value = random_password.argocd_webhook.result
+  }
+
+  dynamic "set" {
+    for_each = toset(local.argocd_metric_components)
+    content {
+      name  = "${set.value}.metrics.enabled"
+      value = "true"
+    }
+  }
+
+  dynamic "set" {
+    for_each = toset(local.argocd_metric_components)
+    content {
+      name  = "${set.value}.metrics.serviceMonitor.enabled"
+      value = "true"
+    }
   }
 
   depends_on = [
