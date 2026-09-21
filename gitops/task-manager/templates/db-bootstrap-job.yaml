@@ -73,7 +73,7 @@ spec:
               \gexec
 
               ALTER ROLE :"user" WITH LOGIN PASSWORD :'pw';
-              ALTER ROLE :"user" WITH NOCREATEDB NOCREATEROLE NOSUPERUSER NOREPLICATION NOBYPASSRLS;
+              ALTER ROLE :"user" WITH NOCREATEDB NOCREATEROLE;
 
               GRANT CONNECT ON DATABASE :"db" TO :"user";
               GRANT USAGE, CREATE ON SCHEMA public TO :"user";
