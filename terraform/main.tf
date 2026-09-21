@@ -37,7 +37,7 @@ provider "aws" {
 }
 
 provider "github" {
-  token = ephemeral.aws_secretsmanager_secret_version.github_token.secret_string
+  token = trimspace(ephemeral.aws_secretsmanager_secret_version.github_token.secret_string)
   owner = local.github_owner
 }
 

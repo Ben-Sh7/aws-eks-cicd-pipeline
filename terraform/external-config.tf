@@ -35,7 +35,7 @@ data "aws_secretsmanager_secret_version" "config" {
 }
 
 locals {
-  config = try(jsondecode(data.aws_secretsmanager_secret_version.config.secret_string), {})
+  config = try(jsondecode(nonsensitive(data.aws_secretsmanager_secret_version.config.secret_string)), {})
 
   domain_name     = lookup(local.config, "DOMAIN_NAME", "")
   github_repo     = lookup(local.config, "GITHUB_REPO", "")

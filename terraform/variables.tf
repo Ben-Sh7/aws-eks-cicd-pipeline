@@ -201,3 +201,9 @@ variable "aws_profile" {
   type        = string
   default     = ""
 }
+
+variable "argocd_apps_chart_version" {
+  description = "Pinned argocd-apps Helm chart version. Creates the Application; kept separate from the argo-cd release because a chart cannot create a custom resource whose CRD it installs in that same release."
+  type        = string
+  default     = "2.0.2"
+}

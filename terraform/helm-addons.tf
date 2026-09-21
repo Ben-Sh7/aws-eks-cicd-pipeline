@@ -308,56 +308,60 @@ resource "helm_release" "argocd" {
     value = random_password.argocd_webhook.result
   }
 
-  values = [yamlencode({
-    extraObjects = [
-      {
-        apiVersion = "argoproj.io/v1alpha1"
-        kind       = "Application"
-        metadata = {
-          name      = "task-manager"
-          namespace = "argocd"
-        }
-        spec = {
-          project = "default"
-
-          source = {
-            repoURL        = "https://github.com/${local.github_repo}.git"
-            targetRevision = "main"
-            path           = "gitops/task-manager"
-            helm = {
-              valueFiles = ["values.yaml", "values-images.yaml"]
-              parameters = [
-                { name = "config.dbHost", value = aws_db_instance.postgres.address },
-                { name = "config.appUrl", value = local.app_url },
-                { name = "secrets.awsRegion", value = var.aws_region },
-                { name = "secrets.awsSecretName", value = aws_db_instance.postgres.master_user_secret[0].secret_arn },
-                { name = "secrets.jwtSecretName", value = aws_secretsmanager_secret.jwt_secret.name },
-                { name = "secrets.googleSecretName", value = data.aws_secretsmanager_secret.app.name },
-                { name = "backend.image.repository", value = aws_ecr_repository.backend.repository_url },
-                { name = "frontend.image.repository", value = aws_ecr_repository.frontend.repository_url },
-                { name = "ingress.host", value = local.app_fqdn },
-              ]
-            }
-          }
-
-          destination = {
-            server    = "https://kubernetes.default.svc"
-            namespace = "default"
-          }
-
-          syncPolicy = {
-            automated = {
-              selfHeal = true
-              prune    = true
-            }
-          }
-        }
-      },
-    ]
-  })]
-
   depends_on = [
     aws_eks_node_group.main,
     helm_release.kube_prometheus_stack,
   ]
+}
+
+resource "helm_release" "argocd_app" {
+  name       = "task-manager-app"
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argocd-apps"
+  version    = var.argocd_apps_chart_version
+  namespace  = "argocd"
+  timeout    = 600
+
+  values = [yamlencode({
+    applications = {
+      "task-manager" = {
+        namespace = "argocd"
+        project   = "default"
+
+        source = {
+          repoURL        = "https://github.com/${local.github_repo}.git"
+          targetRevision = "main"
+          path           = "gitops/task-manager"
+          helm = {
+            valueFiles = ["values.yaml", "values-images.yaml"]
+            parameters = [
+              { name = "config.dbHost", value = aws_db_instance.postgres.address },
+              { name = "config.appUrl", value = local.app_url },
+              { name = "secrets.awsRegion", value = var.aws_region },
+              { name = "secrets.awsSecretName", value = aws_db_instance.postgres.master_user_secret[0].secret_arn },
+              { name = "secrets.jwtSecretName", value = aws_secretsmanager_secret.jwt_secret.name },
+              { name = "secrets.googleSecretName", value = data.aws_secretsmanager_secret.app.name },
+              { name = "backend.image.repository", value = aws_ecr_repository.backend.repository_url },
+              { name = "frontend.image.repository", value = aws_ecr_repository.frontend.repository_url },
+              { name = "ingress.host", value = local.app_fqdn },
+            ]
+          }
+        }
+
+        destination = {
+          server    = "https://kubernetes.default.svc"
+          namespace = "default"
+        }
+
+        syncPolicy = {
+          automated = {
+            selfHeal = true
+            prune    = true
+          }
+        }
+      }
+    }
+  })]
+
+  depends_on = [helm_release.argocd]
 }
