@@ -208,12 +208,17 @@ resource "helm_release" "external_secrets" {
   ]
 }
 
+resource "time_sleep" "csi_drain" {
+  depends_on       = [kubernetes_storage_class.gp3_tagged]
+  destroy_duration = "90s"
+}
+
 resource "kubernetes_namespace" "monitoring" {
   metadata {
     name = "monitoring"
   }
 
-  depends_on = [kubernetes_storage_class.gp3_tagged]
+  depends_on = [time_sleep.csi_drain]
 }
 
 resource "helm_release" "kube_prometheus_stack" {
