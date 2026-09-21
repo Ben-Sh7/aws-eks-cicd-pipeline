@@ -13,6 +13,44 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: default-deny-egress
+  labels:
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-bootstrap
+  labels:
+    app: db-bootstrap
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: db-bootstrap
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: {{ .Values.config.dbPort | int }}
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: frontend
   labels:
     app: frontend
