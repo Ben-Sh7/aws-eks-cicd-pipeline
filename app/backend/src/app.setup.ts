@@ -10,7 +10,7 @@ export function configureApp(app: NestExpressApplication): void {
   // client - the frontend - and throttle all users together.
   app.set('trust proxy', 'loopback, linklocal, uniquelocal');
   app.use(helmet());
-  app.setGlobalPrefix('api', { exclude: ['health'] });
+  app.setGlobalPrefix('api', { exclude: ['health', 'metrics'] });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
