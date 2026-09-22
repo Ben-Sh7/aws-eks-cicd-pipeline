@@ -255,7 +255,7 @@ What is arranged:
 |---|---|
 | The ArgoCD `Application` carries **no finalizer** | Helm deletes the Application and the ArgoCD controller in the same uninstall. A finalizer would wait for a controller that is already going, and hang until the timeout. Nothing is lost by dropping it: the app owns only ClusterIP Services, Deployments and an Ingress - no cloud resources |
 | The `monitoring` namespace is a **Terraform resource**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the Prometheus, Grafana and Alertmanager PVCs live in it. Deleting the namespace deletes the PVCs |
-| A 90-second `time_sleep` sits between that namespace and the EBS CSI driver | A PersistentVolume is cluster-scoped and outlives its namespace, and the CSI driver removes the volume asynchronously afterwards. The wait gives it room - though, per the note above, the driver does not use it yet |
+| Between that namespace and the EBS CSI driver, the destroy **waits until the volumes are gone** | A PersistentVolume is cluster-scoped and outlives its namespace, and the CSI driver removes the volume asynchronously afterwards. The destroy waits for each of the cluster's volumes to be deleted, up to 10 minutes; if one is not, it stops there - with the driver still running - instead of leaving it behind |
 | The CSI addon **depends on its policy attachment**, not only its role | Otherwise nothing references the attachment and Terraform removes it in the first second of a destroy, leaving the driver without permission for the rest of it |
 | The vpc-cni addon has `preserve = true` | Nothing orders it after the CSI chain; preserved, `aws-node` goes with the cluster at the very end instead of mid-teardown |
 

@@ -273,9 +273,30 @@ resource "helm_release" "external_secrets" {
   ]
 }
 
-resource "time_sleep" "csi_drain" {
-  depends_on       = [kubernetes_storage_class.gp3_tagged]
-  destroy_duration = "90s"
+resource "terraform_data" "volume_cleanup_gate" {
+  input = {
+    project = local.common_tags.Project
+    env = merge(
+      { AWS_DEFAULT_REGION = var.aws_region },
+      var.aws_profile == "" ? {} : { AWS_PROFILE = var.aws_profile },
+    )
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["bash", "-c"]
+    environment = self.input.env
+
+    command = <<-EOT
+      set -euo pipefail
+      ids=$(aws ec2 describe-volumes --filters "Name=tag:Project,Values=${self.input.project}" "Name=tag-key,Values=kubernetes.io/created-for/pvc/name" --query 'Volumes[].VolumeId' --output text | tr -d '\r')
+      for id in $ids; do
+        aws ec2 wait volume-deleted --volume-ids "$id"
+      done
+    EOT
+  }
+
+  depends_on = [kubernetes_storage_class.gp3_tagged]
 }
 
 resource "kubernetes_namespace" "monitoring" {
@@ -283,7 +304,7 @@ resource "kubernetes_namespace" "monitoring" {
     name = "monitoring"
   }
 
-  depends_on = [time_sleep.csi_drain]
+  depends_on = [terraform_data.volume_cleanup_gate]
 }
 
 resource "helm_release" "kube_prometheus_stack" {
