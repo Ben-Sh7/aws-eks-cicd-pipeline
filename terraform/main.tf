@@ -450,6 +450,8 @@ resource "aws_instance" "jenkins" {
     )
   }
 
+  user_data_replace_on_change = true
+
   user_data = templatefile("${path.module}/templates/jenkins-user-data.sh.tftpl", {
     groovy_script = local.jenkins_groovy_script
     aws_region    = var.aws_region
