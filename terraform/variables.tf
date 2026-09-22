@@ -285,3 +285,33 @@ variable "argocd_apps_chart_version" {
   type        = string
   default     = "2.0.2"
 }
+
+variable "loki_chart_version" {
+  description = "Pinned Loki Helm chart version. Runs as a single binary with S3 behind it - the scalable modes need a cache tier this cluster has no memory for."
+  type        = string
+  default     = "7.3.0"
+}
+
+variable "alloy_chart_version" {
+  description = "Pinned Grafana Alloy Helm chart version. Alloy is the agent that tails the nodes' pod logs and ships them to Loki; it replaced Promtail, which reached end of life in March 2026."
+  type        = string
+  default     = "1.12.1"
+}
+
+variable "loki_retention" {
+  description = "How long Loki keeps logs before its compactor deletes them."
+  type        = string
+  default     = "72h"
+}
+
+variable "loki_bucket_expiration_days" {
+  description = "Backstop on the log bucket: objects older than this are expired by S3 itself, in case the compactor never got to them."
+  type        = number
+  default     = 7
+}
+
+variable "loki_storage_size" {
+  description = "Disk for Loki's write-ahead log and local index. The logs themselves live in S3, so this stays small."
+  type        = string
+  default     = "5Gi"
+}

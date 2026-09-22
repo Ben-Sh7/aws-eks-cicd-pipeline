@@ -161,6 +161,21 @@ The chart refuses to render if any of them is missing, so a gap is a clear sync 
 | Packaging | Helm chart | Deployments, Services, ConfigMap, Secret, Ingress |
 | Ingress | ingress-nginx | The single public entry point |
 | Monitoring | kube-prometheus-stack | Prometheus, Grafana, Alertmanager |
+| Logs | Loki + Alloy | Every pod's log, searchable next to the graphs |
+
+---
+
+## Logs
+
+The application already writes structured JSON, but a log inside a pod dies with it. Alloy runs on every node, tails the pods' log files, labels each line with namespace, pod and container, and ships it to Loki; Grafana queries Loki through a data source it ships with, so a spike on a graph and the lines behind it are one click apart.
+
+| Decision | Why |
+|---|---|
+| Loki runs as a **single binary**, not the scalable mode | The scalable mode's default cache tier alone asks for 9 GB of memory - more than a node has. One process with S3 behind it handles far more than this cluster produces |
+| Chunks live in **S3**, not on a disk | The disk holds only the write-ahead log, so a lost node costs seconds of logs rather than all of them. The bucket is `force_destroy`, so a teardown takes it with everything in it |
+| Loki reaches S3 with an **IRSA role** | The same pattern as every other component here: no access key exists to leak |
+| Alloy reads the **node's log files**, as root | The standard way every log agent works, and the only one that survives load without missing lines. The alternative - asking the Kubernetes API for each pod's log - needs no root, but leans on the API server and can drop lines when a pod restarts. The mount is read-only and every capability is dropped |
+| Retention is **72 hours**, with an S3 lifecycle rule behind it | Loki's compactor deletes what it should; the bucket rule is the backstop for whatever it misses |
 
 ---
 
