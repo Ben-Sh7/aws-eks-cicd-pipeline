@@ -101,21 +101,21 @@ variable "node_instance_type" {
 }
 
 variable "node_desired_size" {
-  description = "Desired number of worker nodes"
+  description = "Node count at creation only. The autoscaler owns it from then on, so Terraform ignores later drift - see the lifecycle block on the node group."
   type        = number
   default     = 2
 }
 
 variable "node_min_size" {
-  description = "Minimum number of worker nodes"
+  description = "Floor the autoscaler may not go below. Two rather than one because EBS volumes belong to a single availability zone: Prometheus, Grafana and Alertmanager can only start on a node in the zone their volume was created in, and the group balances across both."
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "node_max_size" {
-  description = "Maximum number of worker nodes"
+  description = "Ceiling the autoscaler may not go above. The limit that stops a runaway workload from becoming a runaway bill."
   type        = number
-  default     = 3
+  default     = 4
 }
 
 variable "node_max_pods" {
@@ -158,6 +158,30 @@ variable "external_secrets_chart_version" {
   description = "Pinned external-secrets Helm chart version (syncs AWS Secrets Manager into K8s Secrets via IRSA)"
   type        = string
   default     = "0.10.4"
+}
+
+variable "metrics_server_chart_version" {
+  description = "Pinned metrics-server chart version. Supplies the live cpu and memory readings that a HorizontalPodAutoscaler scales on; without it `kubectl top` and every HPA sit blind."
+  type        = string
+  default     = "3.12.2"
+}
+
+variable "cluster_autoscaler_chart_version" {
+  description = "Pinned cluster-autoscaler chart version. Adds a node when a pod cannot be scheduled and removes one that is no longer needed."
+  type        = string
+  default     = "9.43.2"
+}
+
+variable "scale_down_unneeded_time" {
+  description = "How long a node must look unneeded before the autoscaler removes it. Short values thrash; long values pay for idle nodes."
+  type        = string
+  default     = "10m"
+}
+
+variable "scale_down_delay_after_add" {
+  description = "Quiet period after a scale-up before any scale-down is considered, so a burst does not immediately undo itself."
+  type        = string
+  default     = "10m"
 }
 
 variable "prometheus_storage_size" {
