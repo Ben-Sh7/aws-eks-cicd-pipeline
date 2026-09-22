@@ -2,6 +2,7 @@
 import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import {
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -46,6 +47,12 @@ export class Env {
   @Min(1)
   @Max(65535)
   PORT: number = 3001;
+
+  // Quieter than info drops the request log entirely; debug is for chasing a
+  // problem, not for running.
+  @IsOptional()
+  @IsIn(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
+  LOG_LEVEL: string = 'info';
 
   // HS256 is only as strong as its key. 32 characters is the floor.
   @IsString()
