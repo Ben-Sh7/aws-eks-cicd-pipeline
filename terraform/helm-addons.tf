@@ -192,6 +192,17 @@ locals {
   )
 }
 
+resource "helm_release" "prometheus_operator_crds" {
+  name       = "prometheus-operator-crds"
+  repository = "https://prometheus-community.github.io/helm-charts"
+  chart      = "prometheus-operator-crds"
+  version    = var.prometheus_operator_crds_chart_version
+  namespace  = "kube-system"
+  timeout    = 600
+
+  depends_on = [aws_eks_node_group.main]
+}
+
 resource "helm_release" "ingress_nginx" {
   name             = "ingress-nginx"
   repository       = "https://kubernetes.github.io/ingress-nginx"
@@ -232,6 +243,7 @@ resource "helm_release" "ingress_nginx" {
   depends_on = [
     aws_eks_node_group.main,
     aws_acm_certificate_validation.main,
+    helm_release.prometheus_operator_crds,
   ]
 }
 
@@ -283,6 +295,11 @@ resource "helm_release" "kube_prometheus_stack" {
   timeout    = 600
 
   values = [yamlencode(local.monitoring_values)]
+
+  set {
+    name  = "crds.enabled"
+    value = "false"
+  }
 
   set {
     name  = "grafana.service.type"
