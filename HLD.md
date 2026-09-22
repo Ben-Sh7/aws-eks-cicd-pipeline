@@ -238,13 +238,15 @@ touches the network, the load balancer Kubernetes created has been gone for a
 quarter of an hour, so no wait or retry belongs between them. A destroy run on
 2026-09-21 confirmed it: 75 resources, no DependencyViolation.
 
-Three things had to be arranged for the rest to hold:
+Five things had to be arranged for the rest to hold:
 
 | | |
 |---|---|
 | The ArgoCD `Application` carries **no finalizer** | Helm deletes the Application and the ArgoCD controller in the same uninstall. A finalizer would wait for a controller that is already going, and hang until the timeout. Nothing is lost by dropping it: the app owns only ClusterIP Services, Deployments and an Ingress - no cloud resources |
-| The `monitoring` namespace is a **Terraform resource**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the Prometheus and Grafana PVCs live in it. Deleting the namespace deletes the PVCs. The other three namespaces have no PVCs and need no such handling |
-| A 90-second `time_sleep` sits between that namespace and the EBS CSI driver | Deleting a PVC is not the end of it. The PersistentVolume behind it is cluster-scoped, so it outlives the namespace, and the CSI driver deletes the EBS volume asynchronously afterwards - with nothing waiting on it. The first destroy run tore the driver down nine seconds after the namespace and left two volumes, 15 GB, unattached and billing. This is the one place in the teardown where a fixed wait is the right answer: the work is happening inside Kubernetes, where the dependency graph cannot see it |
+| The `monitoring` namespace is a **Terraform resource**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the Prometheus, Grafana and Alertmanager PVCs live in it. Deleting the namespace deletes the PVCs |
+| A 90-second `time_sleep` sits between that namespace and the EBS CSI driver | Deleting a PVC is not the end of it. The PersistentVolume behind it is cluster-scoped, so it outlives the namespace, and the CSI driver deletes the EBS volume asynchronously afterwards - with nothing waiting on it. This is the one place in the teardown where a fixed wait is the right answer: the work is happening inside Kubernetes, where the dependency graph cannot see it |
+| The CSI addon **depends on its policy attachment**, not only its role | The addon references the role, so nothing referenced the attachment and Terraform removed it in the first second of the destroy. The driver then spent the whole drain being refused by IAM, and three volumes were left behind. Depending on the attachment keeps the permission until the driver is gone |
+| The vpc-cni addon has `preserve = true` | Nothing orders it after the CSI chain, and removing `aws-node` during the drain would cut the driver off from the EC2 API. Preserved, it goes with the cluster at the very end |
 
 To confirm nothing was left behind:
 
