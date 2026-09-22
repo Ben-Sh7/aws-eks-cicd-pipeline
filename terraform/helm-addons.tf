@@ -132,6 +132,44 @@ locals {
     }
   }
 
+  db_monitor_k8s_secret = "db-monitor"
+
+  db_monitor_manifest = {
+    apiVersion = "external-secrets.io/v1beta1"
+    kind       = "ExternalSecret"
+    metadata = {
+      name      = local.db_monitor_k8s_secret
+      namespace = "monitoring"
+    }
+    spec = {
+      refreshInterval = "1h"
+      secretStoreRef = {
+        name = local.monitoring_secretstore
+        kind = "SecretStore"
+      }
+      target = {
+        name           = local.db_monitor_k8s_secret
+        creationPolicy = "Owner"
+      }
+      data = [
+        {
+          secretKey = "username"
+          remoteRef = {
+            key      = aws_secretsmanager_secret.db_monitor.name
+            property = "username"
+          }
+        },
+        {
+          secretKey = "password"
+          remoteRef = {
+            key      = aws_secretsmanager_secret.db_monitor.name
+            property = "password"
+          }
+        },
+      ]
+    }
+  }
+
   monitoring_values = merge(
     {
       grafana = {
@@ -144,6 +182,7 @@ locals {
         [
           local.monitoring_secretstore_manifest,
           local.grafana_admin_manifest,
+          local.db_monitor_manifest,
         ],
         var.enable_slack_alerts ? [local.alertmanager_slack_manifest] : [],
       )
@@ -406,6 +445,7 @@ resource "helm_release" "argocd_app" {
               { name = "secrets.awsSecretName", value = aws_db_instance.postgres.master_user_secret[0].secret_arn },
               { name = "secrets.jwtSecretName", value = aws_secretsmanager_secret.jwt_secret.name },
               { name = "secrets.appDbSecretName", value = aws_secretsmanager_secret.app_db_user.name },
+              { name = "secrets.dbMonitorSecretName", value = aws_secretsmanager_secret.db_monitor.name },
               { name = "secrets.googleSecretName", value = data.aws_secretsmanager_secret.app.name },
               { name = "backend.image.repository", value = aws_ecr_repository.backend.repository_url },
               { name = "frontend.image.repository", value = aws_ecr_repository.frontend.repository_url },

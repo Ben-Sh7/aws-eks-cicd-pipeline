@@ -184,6 +184,24 @@ variable "scale_down_delay_after_add" {
   default     = "10m"
 }
 
+variable "blackbox_exporter_chart_version" {
+  description = "Pinned blackbox-exporter chart version. Probes the site the way a visitor does - over the internet, through DNS, the load balancer and the certificate - so it fails where a healthy pod still looks healthy."
+  type        = string
+  default     = "11.18.0"
+}
+
+variable "postgres_exporter_chart_version" {
+  description = "Pinned postgres-exporter chart version. Turns the database's own statistics into Prometheus metrics; RDS CloudWatch sees the instance, this sees the queries."
+  type        = string
+  default     = "8.2.0"
+}
+
+variable "db_monitor_username" {
+  description = "Postgres role the metrics exporter logs in as. Created with pg_monitor and nothing else, so a leak of it exposes statistics rather than data."
+  type        = string
+  default     = "db_monitor"
+}
+
 variable "prometheus_storage_size" {
   description = "PVC size for Prometheus metrics"
   type        = string

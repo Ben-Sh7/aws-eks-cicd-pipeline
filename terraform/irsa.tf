@@ -59,6 +59,7 @@ data "aws_iam_policy_document" "eso_secrets_access" {
       aws_db_instance.postgres.master_user_secret[0].secret_arn,
       aws_secretsmanager_secret.jwt_secret.arn,
       aws_secretsmanager_secret.app_db_user.arn,
+      aws_secretsmanager_secret.db_monitor.arn,
       aws_secretsmanager_secret.grafana_admin.arn,
       data.aws_secretsmanager_secret.app.arn,
     ]

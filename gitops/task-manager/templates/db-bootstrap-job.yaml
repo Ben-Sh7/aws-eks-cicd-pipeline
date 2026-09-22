@@ -62,12 +62,22 @@ spec:
                 secretKeyRef:
                   name: app-secret
                   key: DB_PASSWORD
+            - name: MONITOR_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-admin-secret
+                  key: monitor_user
+            - name: MONITOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-admin-secret
+                  key: monitor_password
           command:
             - /bin/sh
             - -c
             - |
               set -eu
-              psql -v ON_ERROR_STOP=1 -v user="$APP_USER" -v pw="$APP_PASSWORD" -v db="$PGDATABASE" <<'SQL'
+              psql -v ON_ERROR_STOP=1 -v user="$APP_USER" -v pw="$APP_PASSWORD" -v db="$PGDATABASE" -v muser="$MONITOR_USER" -v mpw="$MONITOR_PASSWORD" <<'SQL'
               SELECT format('CREATE ROLE %I LOGIN', :'user')
               WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'user')
               \gexec
@@ -85,6 +95,15 @@ spec:
               SELECT format('ALTER SEQUENCE public.%I OWNER TO %I', sequencename, :'user')
               FROM pg_sequences WHERE schemaname = 'public'
               \gexec
+
+              SELECT format('CREATE ROLE %I LOGIN', :'muser')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'muser')
+              \gexec
+
+              ALTER ROLE :"muser" WITH LOGIN PASSWORD :'mpw';
+              ALTER ROLE :"muser" WITH NOCREATEDB NOCREATEROLE;
+              GRANT pg_monitor TO :"muser";
+              GRANT CONNECT ON DATABASE :"db" TO :"muser";
               SQL
-              echo "role $APP_USER is ready"
+              echo "roles $APP_USER and $MONITOR_USER are ready"
 {{- end }}
