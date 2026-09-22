@@ -169,6 +169,13 @@ locals {
 
       mounts = {
         varlog = true
+
+        extra = [
+          {
+            name      = "alloy-data"
+            mountPath = "/tmp/alloy"
+          },
+        ]
       }
 
       extraEnv = [
@@ -205,6 +212,15 @@ locals {
 
     controller = {
       type = "daemonset"
+
+      volumes = {
+        extra = [
+          {
+            name     = "alloy-data"
+            emptyDir = {}
+          },
+        ]
+      }
     }
 
     serviceMonitor = {
