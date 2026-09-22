@@ -220,6 +220,16 @@ locals {
         admin = {
           existingSecret = local.grafana_admin_secret
         }
+
+        additionalDataSources = [
+          {
+            name      = "Loki"
+            type      = "loki"
+            access    = "proxy"
+            url       = local.loki_url
+            isDefault = false
+          },
+        ]
       }
 
       extraManifests = concat(
