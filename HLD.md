@@ -170,7 +170,9 @@ The chart refuses to render if any of them is missing, so a gap is a clear sync 
 
 `critical` alerts also go to email, through the SNS topic the CloudWatch alarms and the budget already use. Alertmanager publishes with an IRSA role, not a key. One channel is one point of failure: a revoked webhook or a muted channel is indistinguishable from quiet.
 
-**And who watches the alerting?** Alertmanager sends `Watchdog` - the alert that always fires - to a second SNS topic every five minutes, and nothing subscribes to it: the point is the publish, which CloudWatch counts. An alarm on that count fires when the heartbeat stops for fifteen minutes, so Prometheus, Alertmanager, the cluster or the nodes' route to AWS going down raises an email instead of silence. The alarm is ordered after the monitoring release, so a planned destroy takes it away before the heartbeat stops.
+**And who watches the alerting?** Alertmanager sends `Watchdog` - the alert that always fires - to a second SNS topic every couple of minutes, and nothing subscribes to it: the point is the publish, which CloudWatch counts. An alarm on that count fires after fifteen minutes without one, so Prometheus, Alertmanager, the cluster or the nodes' route to AWS going down raises an email instead of silence. The alarm is ordered after the monitoring release, so a planned destroy takes it away before the heartbeat stops.
+
+Two details are the difference between this working and only looking like it does. A metric that stops arriving is not a metric reading zero: CloudWatch leaves such an alarm in its last state, and `treat_missing_data` does not save it - so the alarm reads the count through `FILL(published, 0)`, which turns absence into a zero that breaches. And Alertmanager skips a repeat when `repeat_interval` equals `group_interval`: both are set to a minute and the heartbeat arrives every two, far below the alarm's window. A live test caught both - the first version took thirty-five minutes to notice Alertmanager was switched off, where the current one takes fifteen.
 
 Two things are silenced on purpose:
 

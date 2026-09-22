@@ -123,8 +123,8 @@ locals {
             receiver        = "heartbeat"
             matchers        = ["alertname = \"Watchdog\""]
             group_wait      = "0s"
-            group_interval  = "5m"
-            repeat_interval = "5m"
+            group_interval  = "1m"
+            repeat_interval = "1m"
           },
           {
             receiver = "null"

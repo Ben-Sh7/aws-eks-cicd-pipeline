@@ -63,17 +63,30 @@ resource "aws_iam_role_policy" "alertmanager_publish" {
 resource "aws_cloudwatch_metric_alarm" "alerting_heartbeat" {
   alarm_name          = "${local.project_name}-alerting-heartbeat"
   alarm_description   = "Alertmanager stopped sending its heartbeat - alerting itself is down, and silence means nothing"
-  namespace           = "AWS/SNS"
-  metric_name         = "NumberOfMessagesPublished"
   comparison_operator = "LessThanThreshold"
   threshold           = 1
-  statistic           = "Sum"
-  period              = 900
-  evaluation_periods  = 1
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
   treat_missing_data  = "breaching"
 
-  dimensions = {
-    TopicName = aws_sns_topic.heartbeat.name
+  metric_query {
+    id          = "published"
+    return_data = false
+
+    metric {
+      namespace   = "AWS/SNS"
+      metric_name = "NumberOfMessagesPublished"
+      dimensions  = { TopicName = aws_sns_topic.heartbeat.name }
+      period      = 300
+      stat        = "Sum"
+    }
+  }
+
+  metric_query {
+    id          = "heartbeats"
+    expression  = "FILL(published, 0)"
+    label       = "Heartbeats published"
+    return_data = true
   }
 
   alarm_actions = [aws_sns_topic.alerts.arn]
