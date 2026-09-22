@@ -18,7 +18,10 @@ resource "aws_nat_gateway" "main" {
     { Name = "${local.project_name}-nat" }
   )
 
-  depends_on = [aws_internet_gateway.main]
+  depends_on = [
+    aws_internet_gateway.main,
+    aws_route_table_association.public_1,
+  ]
 }
 
 resource "aws_route" "private_nat" {

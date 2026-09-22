@@ -231,19 +231,19 @@ Trivy itself is pinned to a fixed version rather than pulled from a floating `la
 terraform destroy
 ```
 
-For the network half, the dependency graph already orders it
-correctly: the Helm releases go first, then the node group (~5 min), then the
-cluster (~10 min), and only then the subnets and the VPC. By the time anything
-touches the network, the load balancer Kubernetes created has been gone for a
-quarter of an hour, so no wait or retry belongs between them. A destroy run on
-2026-09-22 confirmed it: 97 resources, no DependencyViolation.
+The dependency graph orders the network half: the Helm releases go first, then
+the node group (~5 min), then the cluster (~10 min), and only then the subnets
+and the VPC. By the time anything touches the network, the load balancer
+Kubernetes created has been gone for a quarter of an hour, so no wait or retry
+belongs between them. A destroy run on 2026-09-22 confirmed it: 97 resources, no
+DependencyViolation.
 
-**Not solved yet: the monitoring volumes.** Every destroy leaves the Prometheus,
-Grafana and Alertmanager EBS volumes behind. CloudTrail shows the CSI driver never
-calls DetachVolume or DeleteVolume during teardown - not even a refused call - and
-every DeleteVolume in the account's history was made by hand. The safeguards in the
-table below are each correct, and none of them is the cause. Until it is found,
-check after every destroy:
+**Why the monitoring volumes used to be left behind.** The nodes reach the AWS
+API through the NAT, and nothing referenced the route to it, so Terraform deleted
+it in the first second of a destroy. The EBS CSI driver's calls then timed out
+before reaching AWS - which is why CloudTrail showed none - so no volume could be
+detached, and Kubernetes does not delete an attached volume. The first row below
+is the fix. To check after a destroy:
 
 ```bash
 aws ec2 describe-volumes --filters Name=status,Values=available Name=tag:Project,Values=task-manager
@@ -253,6 +253,7 @@ What is arranged:
 
 | | |
 |---|---|
+| The node group **depends on the NAT route** and on the private subnets' route-table links; the NAT, on its own subnet's link | Nothing else references them, so without this Terraform deletes them in the first second of a destroy, and everything still running on the nodes loses its way to the AWS API |
 | The ArgoCD `Application` carries **no finalizer** | Helm deletes the Application and the ArgoCD controller in the same uninstall. A finalizer would wait for a controller that is already going, and hang until the timeout. Nothing is lost by dropping it: the app owns only ClusterIP Services, Deployments and an Ingress - no cloud resources |
 | The `monitoring` namespace is a **Terraform resource**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the Prometheus, Grafana and Alertmanager PVCs live in it. Deleting the namespace deletes the PVCs |
 | Between that namespace and the EBS CSI driver, the destroy **waits until the volumes are gone** | A PersistentVolume is cluster-scoped and outlives its namespace, and the CSI driver removes the volume asynchronously afterwards. The destroy waits for each of the cluster's volumes to be deleted, up to 10 minutes; if one is not, it stops there - with the driver still running - instead of leaving it behind |
