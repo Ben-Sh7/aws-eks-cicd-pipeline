@@ -88,9 +88,25 @@ locals {
     }
   }
 
+  alertmanager_service_account = "alertmanager"
+
+  alertmanager_slack_config = {
+    api_url_file  = "/etc/alertmanager/secrets/${local.alertmanager_slack_secret}/${local.alertmanager_slack_key}"
+    channel       = var.slack_channel
+    send_resolved = true
+    title         = "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .Alerts | len }})"
+    text          = "{{ range .Alerts }}{{ .Labels.severity }}: {{ .Annotations.summary }} - {{ .Annotations.description }}\n{{ end }}"
+  }
+
   alertmanager_config = {
     alertmanagerSpec = {
       secrets = [local.alertmanager_slack_secret]
+    }
+
+    serviceAccount = {
+      create      = true
+      name        = local.alertmanager_service_account
+      annotations = { "eks.amazonaws.com/role-arn" = aws_iam_role.alertmanager.arn }
     }
 
     config = {
@@ -104,12 +120,23 @@ locals {
         repeat_interval = "4h"
         routes = [
           {
+            receiver        = "heartbeat"
+            matchers        = ["alertname = \"Watchdog\""]
+            group_wait      = "0s"
+            group_interval  = "1m"
+            repeat_interval = "1m"
+          },
+          {
             receiver = "null"
-            matchers = ["alertname =~ \"Watchdog|InfoInhibitor\""]
+            matchers = ["alertname = \"InfoInhibitor\""]
+          },
+          {
+            receiver = "critical"
+            matchers = ["severity = \"critical\""]
           },
           {
             receiver = "slack"
-            matchers = ["severity =~ \"warning|critical\""]
+            matchers = ["severity = \"warning\""]
           },
         ]
       }
@@ -117,14 +144,31 @@ locals {
       receivers = [
         { name = "null" },
         {
-          name = "slack"
-          slack_configs = [
+          name          = "slack"
+          slack_configs = [local.alertmanager_slack_config]
+        },
+        {
+          name          = "critical"
+          slack_configs = [local.alertmanager_slack_config]
+          sns_configs = [
             {
-              api_url_file  = "/etc/alertmanager/secrets/${local.alertmanager_slack_secret}/${local.alertmanager_slack_key}"
-              channel       = var.slack_channel
+              topic_arn     = aws_sns_topic.alerts.arn
+              sigv4         = { region = var.aws_region }
+              subject       = "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+              message       = "{{ range .Alerts }}{{ .Annotations.summary }} - {{ .Annotations.description }}\n{{ end }}"
               send_resolved = true
-              title         = "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .Alerts | len }})"
-              text          = "{{ range .Alerts }}{{ .Labels.severity }}: {{ .Annotations.summary }} - {{ .Annotations.description }}\n{{ end }}"
+            },
+          ]
+        },
+        {
+          name = "heartbeat"
+          sns_configs = [
+            {
+              topic_arn     = aws_sns_topic.heartbeat.arn
+              sigv4         = { region = var.aws_region }
+              subject       = "alerting heartbeat"
+              message       = "The alerting pipeline is alive."
+              send_resolved = false
             },
           ]
         },
