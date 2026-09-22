@@ -113,6 +113,18 @@ spec:
       ports:
         - port: {{ .Values.backend.port }}
           protocol: TCP
+    {{- if .Values.serviceMonitor.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: {{ .Values.backend.port }}
+          protocol: TCP
+    {{- end }}
   egress:
     - to:
         - namespaceSelector:
