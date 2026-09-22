@@ -39,7 +39,10 @@ resource "aws_eks_addon" "ebs_csi_driver" {
   service_account_role_arn = aws_iam_role.ebs_csi_driver.arn
   tags                     = local.common_tags
 
-  depends_on = [aws_eks_node_group.main]
+  depends_on = [
+    aws_eks_node_group.main,
+    aws_iam_role_policy_attachment.ebs_csi_driver,
+  ]
 }
 
 resource "kubernetes_storage_class" "gp3_tagged" {
