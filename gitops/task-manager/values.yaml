@@ -109,6 +109,18 @@ networkPolicy:
 prometheusRule:
   enabled: true
 
+# Scrapes /metrics on the backend itself. The blackbox probe and the ingress
+# controller measure the app from outside; this is the only source that knows
+# which route was slow and why.
+serviceMonitor:
+  enabled: true
+
+alerts:
+  # 95th percentile request time, in seconds, that counts as too slow.
+  p95LatencySeconds: 1
+  interval: 30s
+  scrapeTimeout: 10s
+
 # One-shot job that creates the application's Postgres role and hands it the
 # app's own tables. Runs before the deployments on every sync, and is a no-op
 # once the role exists and its password is unchanged.

@@ -7,6 +7,8 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
+import { LoggingModule } from './logging/logging.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { TasksModule } from './tasks/tasks.module';
 
 @Module({
@@ -19,6 +21,8 @@ import { TasksModule } from './tasks/tasks.module';
       validate: validateEnv,
     }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 300 }]),
+    LoggingModule,
+    MetricsModule,
     DatabaseModule,
     AuthModule,
     TasksModule,

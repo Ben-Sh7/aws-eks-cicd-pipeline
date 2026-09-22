@@ -49,6 +49,35 @@ spec:
             summary: "{{`{{ $labels.pod }}`}} keeps restarting"
             description: More than two restarts in fifteen minutes. A crash loop looks healthy in a replica count but is not.
 
+    - name: task-manager.latency
+      rules:
+        - alert: TaskManagerSlowRequests
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le, route) (
+                rate(http_request_duration_seconds_bucket{namespace="{{ .Release.Namespace }}",route!="unmatched"}[5m])
+              )
+            ) > {{ .Values.alerts.p95LatencySeconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{`{{ $labels.route }}`}} is slow for one request in twenty"
+            description: The 95th percentile has stayed above the threshold for ten minutes. Slow is not down, so nothing else here reports it.
+
+        - alert: TaskManagerBackendErrors
+          expr: |
+            sum(rate(http_request_duration_seconds_count{namespace="{{ .Release.Namespace }}",status=~"5.."}[5m]))
+              /
+            sum(rate(http_request_duration_seconds_count{namespace="{{ .Release.Namespace }}"}[5m]))
+              > 0.05
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: The backend is failing more than 5% of its requests
+            description: Counted by the backend itself, so it fires for calls the frontend makes internally as well as ones a visitor made.
+
     - name: task-manager.traffic
       rules:
         - alert: TaskManagerHighErrorRate
