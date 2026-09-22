@@ -423,7 +423,10 @@ resource "aws_eks_node_group" "main" {
   depends_on = [
     aws_iam_role_policy_attachment.eks_node_policy,
     aws_iam_role_policy_attachment.eks_cni_policy,
-    aws_iam_role_policy_attachment.eks_registry_policy
+    aws_iam_role_policy_attachment.eks_registry_policy,
+    aws_route.private_nat,
+    aws_route_table_association.private_1,
+    aws_route_table_association.private_2,
   ]
 }
 
