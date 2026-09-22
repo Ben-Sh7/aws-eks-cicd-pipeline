@@ -8,6 +8,8 @@ pipeline {
         FRONTEND_REPO = 'devops-task-manager-frontend'
         GITOPS_VALUES_FILE = 'gitops/task-manager/values-images.yaml'
         GITOPS_REPO_URL = 'github.com/Ben-Sh7/aws-eks-cicd-pipeline.git'
+        CHART_DIR = 'gitops/task-manager'
+        CHART_STUB_VALUES = 'backend.image.repository=ci,backend.image.tag=ci,frontend.image.repository=ci,frontend.image.tag=ci,config.dbHost=ci,config.appUrl=https://ci.invalid,ingress.host=ci.invalid,secrets.awsSecretName=ci,secrets.jwtSecretName=ci,secrets.appDbSecretName=ci,secrets.dbMonitorSecretName=ci'
         CI_BOT_NAME = 'jenkins-ci-bot'
         CI_BOT_EMAIL = 'jenkins-ci-bot@users.noreply.github.com'
     }
@@ -56,6 +58,21 @@ pipeline {
                     if (env.IMAGE_EXISTS == 'true') {
                         echo "${env.VERSION} is already in ECR - reusing it instead of rebuilding."
                     }
+                }
+            }
+        }
+
+        stage('Validate the chart and its alert rules') {
+            when { expression { env.SKIP_BUILD != 'true' } }
+            steps {
+                script {
+                    echo "Rendering the chart and checking its PromQL - a bad expression fails here instead of at sync time"
+                    sh '''
+                        helm lint ${CHART_DIR} --set-string ${CHART_STUB_VALUES}
+                        helm template check ${CHART_DIR} --set-string ${CHART_STUB_VALUES} > /tmp/rendered.yaml
+                        helm template check ${CHART_DIR} --set-string ${CHART_STUB_VALUES}                             -s templates/prometheusrule.yaml                             | sed -n '/^spec:/,$p' | tail -n +2 | sed 's/^  //' > /tmp/rules.yaml
+                        promtool check rules /tmp/rules.yaml
+                    '''
                 }
             }
         }

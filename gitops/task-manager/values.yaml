@@ -83,6 +83,9 @@ secrets:
   # Login the app connects to Postgres with. The db-bootstrap job creates the
   # role from the master credentials; the pods never see the master password.
   appDbSecretName: ""
+  # Read-only login the metrics exporter uses. The bootstrap job creates the
+  # role; the exporter itself lives in the monitoring namespace.
+  dbMonitorSecretName: ""
   # Holds GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET as one JSON document.
   # Empty switches Google sign-in off entirely - the app then offers username +
   # password accounts only, and nothing in the chart references the credential.
