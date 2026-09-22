@@ -3,6 +3,7 @@ resource "aws_eks_addon" "vpc_cni" {
   addon_name                  = "vpc-cni"
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
+  preserve                    = true
 
   configuration_values = jsonencode({
     enableNetworkPolicy = "true"
