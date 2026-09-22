@@ -142,6 +142,12 @@ variable "ingress_nginx_chart_version" {
   default     = "4.11.3"
 }
 
+variable "prometheus_operator_crds_chart_version" {
+  description = "Pinned prometheus-operator-crds chart version. Installs ServiceMonitor, PrometheusRule and the other operator CRDs before any chart that uses them; must match the operator version kube-prometheus-stack runs (v0.77 for 65.5.1)."
+  type        = string
+  default     = "15.0.0"
+}
+
 variable "kube_prometheus_stack_chart_version" {
   description = "Pinned kube-prometheus-stack Helm chart version"
   type        = string
