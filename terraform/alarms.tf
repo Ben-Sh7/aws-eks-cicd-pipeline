@@ -1,7 +1,6 @@
 resource "aws_sns_topic" "alerts" {
-  name              = "${local.project_name}-alerts"
-  kms_master_key_id = "alias/aws/sns"
-  tags              = local.common_tags
+  name = "${local.project_name}-alerts"
+  tags = local.common_tags
 }
 
 resource "aws_sns_topic_subscription" "alerts_email" {
@@ -10,6 +9,78 @@ resource "aws_sns_topic_subscription" "alerts_email" {
   topic_arn = aws_sns_topic.alerts.arn
   protocol  = "email"
   endpoint  = local.alert_email
+}
+
+resource "aws_sns_topic" "heartbeat" {
+  name = "${local.project_name}-heartbeat"
+  tags = local.common_tags
+}
+
+data "aws_iam_policy_document" "alertmanager_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.eks.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_provider_url_no_scheme}:sub"
+      values   = ["system:serviceaccount:monitoring:${local.alertmanager_service_account}"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_provider_url_no_scheme}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "alertmanager" {
+  name_prefix        = "${local.project_name}-alertmanager-"
+  assume_role_policy = data.aws_iam_policy_document.alertmanager_assume_role.json
+  tags               = local.common_tags
+}
+
+data "aws_iam_policy_document" "alertmanager_publish" {
+  statement {
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.alerts.arn, aws_sns_topic.heartbeat.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "alertmanager_publish" {
+  name   = "${local.project_name}-alertmanager-publish"
+  role   = aws_iam_role.alertmanager.id
+  policy = data.aws_iam_policy_document.alertmanager_publish.json
+}
+
+resource "aws_cloudwatch_metric_alarm" "alerting_heartbeat" {
+  alarm_name          = "${local.project_name}-alerting-heartbeat"
+  alarm_description   = "Alertmanager stopped sending its heartbeat - alerting itself is down, and silence means nothing"
+  namespace           = "AWS/SNS"
+  metric_name         = "NumberOfMessagesPublished"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  statistic           = "Sum"
+  period              = 900
+  evaluation_periods  = 1
+  treat_missing_data  = "breaching"
+
+  dimensions = {
+    TopicName = aws_sns_topic.heartbeat.name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+  ok_actions    = [aws_sns_topic.alerts.arn]
+  tags          = local.common_tags
+
+  depends_on = [helm_release.kube_prometheus_stack]
 }
 
 locals {

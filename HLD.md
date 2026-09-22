@@ -168,11 +168,14 @@ The chart refuses to render if any of them is missing, so a gap is a clear sync 
 
 `warning` and `critical` alerts go to Slack. The URL is never a Terraform input: External Secrets reads `SLACK_WEBHOOK_URL` out of the hand-maintained credentials entry, copies it into the monitoring namespace, and Alertmanager reads it from a mounted file (`api_url_file`) - so it reaches neither the state file nor a rendered Helm value. Without that key, alerts still reach Alertmanager's own UI.
 
-Three things are silenced on purpose:
+`critical` alerts also go to email, through the SNS topic the CloudWatch alarms and the budget already use. Alertmanager publishes with an IRSA role, not a key. One channel is one point of failure: a revoked webhook or a muted channel is indistinguishable from quiet.
+
+**And who watches the alerting?** Alertmanager sends `Watchdog` - the alert that always fires - to a second SNS topic every five minutes, and nothing subscribes to it: the point is the publish, which CloudWatch counts. An alarm on that count fires when the heartbeat stops for fifteen minutes, so Prometheus, Alertmanager, the cluster or the nodes' route to AWS going down raises an email instead of silence. The alarm is ordered after the monitoring release, so a planned destroy takes it away before the heartbeat stops.
+
+Two things are silenced on purpose:
 
 | Silenced | Why |
 |---|---|
-| `Watchdog` | Fires permanently by design — you alert on its *absence* |
 | `InfoInhibitor` | Internal plumbing, never actionable |
 | scheduler / controller-manager / etcd | EKS runs these on AWS's side and doesn't expose them |
 
@@ -285,6 +288,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | The Helm releases are chained with `depends_on` | The provider shares one repository cache across resources; installing them in parallel makes all but one fail with "no cached repo found" on a cold cache. external-secrets also has to precede monitoring, whose release ships an ExternalSecret |
 | The ArgoCD Application comes from the `argocd-apps` chart, in a release ordered after argo-cd | A chart cannot create a custom resource whose CRD it installs in that same release: Helm validates the whole manifest against the cluster before installing anything, so the kind does not exist yet. A `kubernetes_manifest` does not work either - it is evaluated at plan time, before the cluster exists |
 | Kubernetes/Helm providers authenticate through `aws eks get-token`, not `aws_eks_cluster_auth` | That data source resolves once per plan and is stored in state, so the next run configures the provider with a token minted hours earlier. EKS tokens live 15 minutes |
+| The SNS topics carry no KMS key | The AWS managed key for SNS grants use to IAM principals only - CloudWatch and Budgets cannot publish through it, and their notifications would fail silently. A customer managed key would cost a dollar a month and linger for a week after every destroy. The messages carry alarm names, not data |
 | No SSH rule on the Jenkins security group | The instance is reached through SSM Session Manager, which needs no inbound port. Port 22 open on a host holding the GitHub token and ECR push rights was the largest hole here |
 | `aws_route53_record.cert_validation` sets `allow_overwrite` | A stale validation record from a previous certificate in the same zone would otherwise block the apply |
 | Grafana's admin login comes from an ExternalSecret, not a Helm value | A Helm value is an argument of the release resource and would be recorded in state, undoing the write-only argument that generated it |
@@ -302,9 +306,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | One NAT gateway, not one per AZ | ~$32/month instead of ~$64. An AZ outage takes egress for both |
 | S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
-| Alertmanager storage is `emptyDir` | Silences are lost on a pod restart. A ~1Gi PVC fixes it |
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
-| No app-specific alerts | Current rules catch a crashed pod, not a backend returning 500s |
 | ECR repository names are fixed strings, not derived from `project_name` | The Jenkinsfile names the same repositories, and nothing passes the Terraform value to it. Renaming the project means editing both |
 
 ---
