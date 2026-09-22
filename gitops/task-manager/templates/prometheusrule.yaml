@@ -55,7 +55,7 @@ spec:
           expr: |
             histogram_quantile(0.95,
               sum by (le, route) (
-                rate(http_request_duration_seconds_bucket{namespace="{{ .Release.Namespace }}",route!="unmatched"}[5m])
+                rate(http_request_duration_seconds_bucket{namespace="{{ .Release.Namespace }}",route!~"unmatched|/health|/metrics"}[5m])
               )
             ) > {{ .Values.alerts.p95LatencySeconds }}
           for: 10m
@@ -67,9 +67,9 @@ spec:
 
         - alert: TaskManagerBackendErrors
           expr: |
-            sum(rate(http_request_duration_seconds_count{namespace="{{ .Release.Namespace }}",status=~"5.."}[5m]))
+            sum(rate(http_request_duration_seconds_count{namespace="{{ .Release.Namespace }}",route!~"/health|/metrics",status=~"5.."}[5m]))
               /
-            sum(rate(http_request_duration_seconds_count{namespace="{{ .Release.Namespace }}"}[5m]))
+            sum(rate(http_request_duration_seconds_count{namespace="{{ .Release.Namespace }}",route!~"/health|/metrics"}[5m]))
               > 0.05
           for: 10m
           labels:
