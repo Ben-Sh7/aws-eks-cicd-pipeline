@@ -118,6 +118,12 @@ variable "node_max_size" {
   default     = 3
 }
 
+variable "node_max_pods" {
+  description = "Pods a node may run. The IP-per-pod default is 17 on t3.medium, which the add-ons alone nearly fill; prefix delegation lifts the address limit and this lifts kubelet's. Kept well under what the addresses now allow, because 4 GiB of memory runs out before the addresses do."
+  type        = number
+  default     = 50
+}
+
 variable "jenkins_instance_type" {
   description = "EC2 instance type for Jenkins"
   type        = string
@@ -170,6 +176,18 @@ variable "grafana_storage_size" {
   description = "PVC size for Grafana dashboards/settings"
   type        = string
   default     = "5Gi"
+}
+
+variable "alertmanager_storage_size" {
+  description = "PVC size for Alertmanager. Without one its silences live in an emptyDir and are lost whenever the pod moves."
+  type        = string
+  default     = "1Gi"
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly spend that triggers a budget notification. The alert is the point - it arrives before the bill does."
+  type        = number
+  default     = 50
 }
 
 variable "jenkins_ui_allowed_cidrs" {

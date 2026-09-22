@@ -40,6 +40,7 @@ locals {
   domain_name     = lookup(local.config, "DOMAIN_NAME", "")
   github_repo     = lookup(local.config, "GITHUB_REPO", "")
   github_username = lookup(local.config, "GITHUB_USERNAME", "")
+  alert_email     = lookup(local.config, "ALERT_EMAIL", "")
 }
 
 data "aws_secretsmanager_secret" "app" {
