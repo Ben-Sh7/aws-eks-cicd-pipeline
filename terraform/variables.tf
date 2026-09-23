@@ -315,3 +315,9 @@ variable "loki_storage_size" {
   type        = string
   default     = "5Gi"
 }
+
+variable "gitops_revision" {
+  description = "Branch ArgoCD follows for the chart. Stays on main; point it at a branch with -var=gitops_revision=<branch> to test a change under gitops/ before merging it, since ArgoCD reads the repository rather than the machine running the apply."
+  type        = string
+  default     = "main"
+}
