@@ -526,7 +526,7 @@ resource "helm_release" "argocd_app" {
 
         source = {
           repoURL        = "https://github.com/${local.github_repo}.git"
-          targetRevision = "main"
+          targetRevision = var.gitops_revision
           path           = "gitops/task-manager"
           helm = {
             valueFiles = ["values.yaml", "values-images.yaml"]
