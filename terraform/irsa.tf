@@ -61,7 +61,10 @@ data "aws_iam_policy_document" "eso_secrets_access" {
       aws_secretsmanager_secret.app_db_user.arn,
       aws_secretsmanager_secret.db_monitor.arn,
       aws_secretsmanager_secret.grafana_admin.arn,
+      aws_secretsmanager_secret.jenkins_admin.arn,
+      aws_secretsmanager_secret.jenkins_webhook.arn,
       data.aws_secretsmanager_secret.app.arn,
+      data.aws_secretsmanager_secret.github_token.arn,
     ]
   }
 }

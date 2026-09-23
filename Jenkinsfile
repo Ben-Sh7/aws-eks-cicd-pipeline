@@ -1,6 +1,82 @@
-
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins-agent
+  nodeSelector:
+    workload: jenkins
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: jenkins
+      effect: NoSchedule
+  containers:
+    - name: aws
+      image: amazon/aws-cli:2.37.1
+      command: ["cat"]
+      tty: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 256Mi
+    - name: helm
+      image: alpine/helm:3.22.0
+      command: ["cat"]
+      tty: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 256Mi
+    - name: promtool
+      image: prom/prometheus:v3.0.1
+      command: ["cat"]
+      tty: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 256Mi
+    - name: trivy
+      image: aquasec/trivy:0.74.0
+      command: ["cat"]
+      tty: true
+      resources:
+        requests:
+          cpu: 100m
+          memory: 512Mi
+        limits:
+          memory: 1Gi
+    - name: buildkit
+      image: moby/buildkit:v0.33.0-rootless
+      args: ["--addr", "unix:///run/user/1000/buildkit/buildkitd.sock", "--oci-worker-no-process-sandbox"]
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: Unconfined
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          memory: 3Gi
+      volumeMounts:
+        - name: buildkitd
+          mountPath: /home/user/.local/share/buildkit
+  volumes:
+    - name: buildkitd
+      emptyDir: {}
+'''
+        }
+    }
 
     environment {
         AWS_REGION = 'us-east-1'
@@ -13,6 +89,7 @@ pipeline {
         CHART_STUB_VALUES = 'backend.image.repository=ci,backend.image.tag=ci,frontend.image.repository=ci,frontend.image.tag=ci,config.dbHost=ci,config.appUrl=https://ci.invalid,ingress.host=ci.invalid,secrets.awsSecretName=ci,secrets.jwtSecretName=ci,secrets.appDbSecretName=ci,secrets.dbMonitorSecretName=ci'
         CI_BOT_NAME = 'jenkins-ci-bot'
         CI_BOT_EMAIL = 'jenkins-ci-bot@users.noreply.github.com'
+        BUILDKIT_HOST = 'unix:///run/user/1000/buildkit/buildkitd.sock'
     }
 
     stages {
@@ -28,10 +105,12 @@ pipeline {
 
         stage('Resolve ECR registry') {
             steps {
-                script {
-                    def account = sh(script: 'aws sts get-caller-identity --query Account --output text', returnStdout: true).trim()
-                    env.ECR_REGISTRY = "${account}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
-                    echo "ECR registry: ${env.ECR_REGISTRY}"
+                container('aws') {
+                    script {
+                        def account = sh(script: 'aws sts get-caller-identity --query Account --output text', returnStdout: true).trim()
+                        env.ECR_REGISTRY = "${account}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                        echo "ECR registry: ${env.ECR_REGISTRY}"
+                    }
                 }
             }
         }
@@ -52,12 +131,14 @@ pipeline {
         stage('Guard: skip commits already in ECR') {
             when { expression { env.SKIP_BUILD != 'true' } }
             steps {
-                script {
-                    def backend = sh(script: "aws ecr describe-images --repository-name ${BACKEND_REPO} --image-ids imageTag=${env.VERSION} --region ${AWS_REGION} > /dev/null 2>&1", returnStatus: true)
-                    def frontend = sh(script: "aws ecr describe-images --repository-name ${FRONTEND_REPO} --image-ids imageTag=${env.VERSION} --region ${AWS_REGION} > /dev/null 2>&1", returnStatus: true)
-                    env.IMAGE_EXISTS = (backend == 0 && frontend == 0) ? 'true' : 'false'
-                    if (env.IMAGE_EXISTS == 'true') {
-                        echo "${env.VERSION} is already in ECR - reusing it instead of rebuilding."
+                container('aws') {
+                    script {
+                        def backend = sh(script: "aws ecr describe-images --repository-name ${BACKEND_REPO} --image-ids imageTag=${env.VERSION} --region ${AWS_REGION} > /dev/null 2>&1", returnStatus: true)
+                        def frontend = sh(script: "aws ecr describe-images --repository-name ${FRONTEND_REPO} --image-ids imageTag=${env.VERSION} --region ${AWS_REGION} > /dev/null 2>&1", returnStatus: true)
+                        env.IMAGE_EXISTS = (backend == 0 && frontend == 0) ? 'true' : 'false'
+                        if (env.IMAGE_EXISTS == 'true') {
+                            echo "${env.VERSION} is already in ECR - reusing it instead of rebuilding."
+                        }
                     }
                 }
             }
@@ -66,51 +147,67 @@ pipeline {
         stage('Validate the chart and its alert rules') {
             when { expression { env.SKIP_BUILD != 'true' } }
             steps {
-                script {
-                    echo "Rendering the chart and checking its PromQL - a bad expression fails here instead of at sync time"
+                echo "Rendering the chart and checking its PromQL - a bad expression fails here instead of at sync time"
+                container('helm') {
                     sh '''
                         helm lint ${CHART_DIR} --set-string ${CHART_STUB_VALUES}
-                        helm template check ${CHART_DIR} --set-string ${CHART_STUB_VALUES} > /tmp/rendered.yaml
-                        helm template check ${CHART_DIR} --set-string ${CHART_STUB_VALUES}                             -s templates/prometheusrule.yaml                             | sed -n '/^spec:/,$p' | tail -n +2 | sed 's/^  //' > /tmp/rules.yaml
-                        promtool check rules /tmp/rules.yaml
+                        helm template check ${CHART_DIR} --set-string ${CHART_STUB_VALUES} > rendered.yaml
+                        helm template check ${CHART_DIR} --set-string ${CHART_STUB_VALUES} \
+                            -s templates/prometheusrule.yaml \
+                            | sed -n '/^spec:/,$p' | tail -n +2 | sed 's/^  //' > rules.yaml
+                    '''
+                }
+                container('promtool') {
+                    sh 'promtool check rules rules.yaml'
+                }
+            }
+        }
+
+        stage('Sign in to ECR') {
+            when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
+            steps {
+                echo "Writing a registry credential the builder can use - the pod's own IAM identity earns it"
+                container('aws') {
+                    sh '''
+                        mkdir -p ${WORKSPACE}/.docker
+                        printf '{"auths":{"%s":{"auth":"%s"}}}' \
+                            "${ECR_REGISTRY}" \
+                            "$(printf 'AWS:%s' "$(aws ecr get-login-password --region ${AWS_REGION})" | base64 -w0)" \
+                            > ${WORKSPACE}/.docker/config.json
                     '''
                 }
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Build images') {
             when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
             steps {
-                script {
-                    echo "Building Docker images with tag: ${env.VERSION}"
+                echo "Building with BuildKit, to a local file first - nothing reaches ECR before it is scanned"
+                container('buildkit') {
                     sh '''
-                        docker build -t ${BACKEND_REPO}:${VERSION} ./app/backend
-                        docker build -t ${FRONTEND_REPO}:${VERSION} ./app/frontend
+                        for app in backend frontend; do
+                            buildctl build \
+                                --frontend dockerfile.v0 \
+                                --local context=app/${app} \
+                                --local dockerfile=app/${app} \
+                                --output type=docker,name=${app}:${VERSION},dest=${WORKSPACE}/${app}.tar
+                        done
                     '''
                 }
             }
         }
 
-        stage('Scan Images for CVEs (Trivy)') {
+        stage('Scan images for CVEs (Trivy)') {
             when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
             steps {
-                script {
-                    echo "Scanning images for HIGH/CRITICAL CVEs - fails the build before anything reaches ECR"
+                echo "Scanning the built files for HIGH/CRITICAL CVEs - fails the build before anything reaches ECR"
+                container('trivy') {
                     sh '''
-                        trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed ${BACKEND_REPO}:${VERSION}
-                        trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed ${FRONTEND_REPO}:${VERSION}
-                    '''
-                }
-            }
-        }
-
-        stage('Login to AWS ECR') {
-            when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
-            steps {
-                script {
-                    echo "Logging in to AWS ECR"
-                    sh '''
-                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                        for app in backend frontend; do
+                            trivy image --input ${WORKSPACE}/${app}.tar \
+                                --cache-dir ${WORKSPACE}/.trivy \
+                                --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed
+                        done
                     '''
                 }
             }
@@ -119,14 +216,22 @@ pipeline {
         stage('Push to ECR') {
             when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
             steps {
-                script {
-                    echo "Pushing images to ECR with tag: ${env.VERSION}"
+                echo "Pushing images to ECR with tag: ${env.VERSION}"
+                container('buildkit') {
                     sh '''
-                        docker tag ${BACKEND_REPO}:${VERSION} ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
-                        docker push ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
+                        export DOCKER_CONFIG=${WORKSPACE}/.docker
 
-                        docker tag ${FRONTEND_REPO}:${VERSION} ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
-                        docker push ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
+                        buildctl build \
+                            --frontend dockerfile.v0 \
+                            --local context=app/backend \
+                            --local dockerfile=app/backend \
+                            --output type=image,name=${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION},push=true
+
+                        buildctl build \
+                            --frontend dockerfile.v0 \
+                            --local context=app/frontend \
+                            --local dockerfile=app/frontend \
+                            --output type=image,name=${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION},push=true
                     '''
                 }
             }
@@ -135,50 +240,51 @@ pipeline {
         stage('Update GitOps Values') {
             when { expression { env.SKIP_BUILD != 'true' } }
             steps {
-                script {
-                    echo "Bumping ${GITOPS_VALUES_FILE} to ${env.VERSION} and pushing - this is what triggers ArgoCD to deploy"
-                    withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
-                        sh '''
-                            git config user.name "${CI_BOT_NAME}"
-                            git config user.email "${CI_BOT_EMAIL}"
+                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+                    sh '''
+                        git config user.name "${CI_BOT_NAME}"
+                        git config user.email "${CI_BOT_EMAIL}"
 
-                            for attempt in 1 2 3; do
-                                git fetch --quiet origin main
-                                git checkout --quiet -B deploy FETCH_HEAD
+                        for attempt in 1 2 3; do
+                            git fetch --quiet origin main
+                            git checkout --quiet -B deploy FETCH_HEAD
 
-                                LATEST=$(git log -1 --first-parent --abbrev=7 --format=%h -- ${APP_DIR})
-                                if [ "$LATEST" != "${VERSION}" ]; then
-                                    echo "main already has newer app code (${LATEST}) - that build owns the deploy."
-                                    exit 0
-                                fi
+                            LATEST=$(git log -1 --first-parent --abbrev=7 --format=%h -- ${APP_DIR})
+                            if [ "$LATEST" != "${VERSION}" ]; then
+                                echo "main already has newer app code (${LATEST}) - that build owns the deploy."
+                                exit 0
+                            fi
 
-                                cat > ${GITOPS_VALUES_FILE} << YAML
-# Managed by Jenkins CI - do not hand-edit. ArgoCD deploys whatever tag is here.
+                            cat > ${GITOPS_VALUES_FILE} << YAML
 backend:
   image:
+    repository: ${ECR_REGISTRY}/${BACKEND_REPO}
     tag: "${VERSION}"
+
 frontend:
   image:
+    repository: ${ECR_REGISTRY}/${FRONTEND_REPO}
     tag: "${VERSION}"
 YAML
 
-                                git add ${GITOPS_VALUES_FILE}
-                                if git diff --cached --quiet; then
-                                    echo "${GITOPS_VALUES_FILE} already points at ${VERSION} - nothing to deploy."
-                                    exit 0
-                                fi
+                            git add ${GITOPS_VALUES_FILE}
+                            if git diff --cached --quiet; then
+                                echo "${GITOPS_VALUES_FILE} already points at ${VERSION} - nothing to deploy."
+                                exit 0
+                            fi
 
-                                git commit --quiet -m "ci: deploy ${VERSION}"
-                                if git push --quiet https://${GIT_USER}:${GIT_TOKEN}@${GITOPS_REPO_URL} HEAD:main; then
-                                    exit 0
-                                fi
-                                echo "main moved while pushing - retrying on top of it (attempt ${attempt})"
-                            done
+                            git commit --quiet -m "ci: deploy ${VERSION}"
 
-                            echo "Could not land the deploy commit after 3 attempts."
-                            exit 1
-                        '''
-                    }
+                            if git push --quiet https://${GIT_USER}:${GIT_TOKEN}@${GITOPS_REPO_URL} HEAD:main; then
+                                exit 0
+                            fi
+
+                            echo "main moved while pushing - retrying on top of it (attempt ${attempt})"
+                        done
+
+                        echo "Could not land the deploy commit after 3 attempts."
+                        exit 1
+                    '''
                 }
             }
         }
@@ -186,13 +292,10 @@ YAML
 
     post {
         success {
-            echo "Pipeline executed successfully!"
-            echo "Backend image: ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}"
-            echo "Frontend image: ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}"
-            echo "ArgoCD will pick up the values-images.yaml change and deploy it automatically."
+            echo "Build ${env.BUILD_NUMBER} finished: ${env.VERSION}"
         }
         failure {
-            echo "Pipeline failed. Check logs for details."
+            echo "Build ${env.BUILD_NUMBER} failed"
         }
     }
 }

@@ -2,9 +2,9 @@
 
 ## The idea in one line
 
-**Jenkins cannot touch the cluster.** It writes the new image tag to Git. ArgoCD reads Git and deploys.
+**Jenkins does not deploy.** It writes the new image tag to Git. ArgoCD reads Git and deploys.
 
-That split is why a compromised CI server can't reach production, and why `git revert` is a rollback.
+That split is why a compromised build can't reach production, and why `git revert` is a rollback. Jenkins now runs inside the cluster, but nothing changed about the split: a build's identity can push images to two ECR repositories and run pods in its own namespace, and that is all of it.
 
 ---
 
@@ -16,12 +16,12 @@ That split is why a compromised CI server can't reach production, and why `git r
 
 ## Inside the cluster
 
-Three EC2 instances:
+Two node groups, all of it in private subnets with no public IP:
 
-| | Where | Why |
-|---|---|---|
-| **2 × worker nodes** | Private subnets, no public IP | Run the app. ASG 1–3, desired 2 |
-| **1 × Jenkins** | Public subnet | Needs a public IP for GitHub webhooks. No cluster access |
+| | Why |
+|---|---|
+| **App nodes**, 2–4 | The app, the monitoring, the cluster's own add-ons |
+| **Jenkins nodes**, 1–3 | Tainted, so only CI lands there. One is always up for the controller; the autoscaler adds more only when builds queue |
 
 The nodes need internet access to pull images. That goes out through one NAT gateway. ECR image layers skip it: they come from S3, through a free S3 gateway endpoint.
 
@@ -153,7 +153,7 @@ The chart refuses to render if any of them is missing, so a gap is a clear sync 
 | Component | Tool | Job |
 |---|---|---|
 | Infra + add-ons | Terraform | VPC, EKS, EC2, ECR, RDS, and the four cluster add-ons |
-| CI | Jenkins | Build, scan, push, bump the tag file |
+| CI | Jenkins | In-cluster, on its own node group: build, scan, push, bump the tag file |
 | CD | ArgoCD | Apply the chart, self-heal drift, prune |
 | App | Next.js + NestJS | Frontend with a session layer, and the API behind it |
 | Database | RDS Postgres | Private, SG-restricted, AWS-managed password |
@@ -224,8 +224,8 @@ Two things are silenced on purpose:
 |---|---|
 | Worker nodes | Private subnets, no public IP. Egress via NAT, except in-region S3 (gateway endpoint) |
 | App | HTTPS only - the load balancer terminates TLS, and nginx redirects port 80. The backend is `ClusterIP` only |
-| Jenkins :8080 | Your IP + GitHub's webhook ranges. Nothing else |
-| Jenkins SSH | **None.** Access is through SSM Session Manager |
+| Jenkins | HTTPS through the ingress, limited to your IP + GitHub's webhook ranges. Nothing else |
+| Jenkins host access | **None.** There is no machine to log in to |
 | Grafana | ClusterIP. `port-forward` only |
 | ArgoCD | ClusterIP, with one path exposed: `/api/webhook`, `pathType: Exact` |
 
@@ -338,23 +338,29 @@ Decisions that are not obvious from reading the code, and that something depends
 | S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
+| CI lives in the cluster it deploys to | A broken cluster is a broken CI, and a push while the stack is down is neither built nor scanned until the next apply. The trade for elastic build capacity and one way of running everything |
+| Build history dies with the environment | JENKINS_HOME is a volume the destroy takes. The configuration is code, so a rebuild returns an identical Jenkins - with an empty history |
 | ECR repository names are fixed strings, not derived from `project_name` | The Jenkinsfile names the same repositories, and nothing passes the Terraform value to it. Renaming the project means editing both |
 
 ---
 
-## Jenkins bootstrap
+## Jenkins
 
-`user_data` installs Jenkins, Docker and the AWS CLI on first boot. A Groovy script then runs as Jenkins starts and creates:
+Jenkins runs in the cluster, on a node group of its own. A build is a pod that appears, works and disappears - so two builds do not queue behind one machine, and nothing sits idle between them. The node group carries a taint, so only Jenkins lands there: a heavy build cannot starve the app or the monitoring, and the bill shows what CI costs on its own.
 
-1. The admin account *(skipping the setup wizard, which would leave Jenkins with no login)*
-2. The `github-credentials` credential
-3. The `task-manager` pipeline job, wired to this repo
+The controller's entire configuration is `JCasC` - the admin account, the two credentials, the GitHub plugin's webhook secret, and the pipeline job itself. Nothing is created by hand in the UI, and nothing survives that was not declared. The job's first build is queued by that same configuration, because ECR is empty after every rebuild and nothing else would trigger one.
 
-The same Groovy script queues that job's first build — ECR is empty after every rebuild, and without one the pods would wait for the next push.
+Its four secrets - the admin username and password, the webhook signing secret and the GitHub token - come from Secrets Manager through External Secrets, as everywhere else here. JCasC reads them from files, so they reach neither the Helm values nor the state file.
 
-The three secrets it needs (its admin password, the webhook signing secret, and the GitHub token) are **not** rendered into `user_data`. Anything written there can be read back by every process on the instance through the metadata service, and is shown in plain text in the EC2 console. `user_data` carries only their Secrets Manager identifiers and fetches the values at boot with the instance's own IAM role, into files readable by the `jenkins` user alone.
+| Decision | Why |
+|---|---|
+| Images are built with **BuildKit**, not `docker build` | There is no Docker daemon on the nodes, and mounting one into a build would hand every build root on the host. Kaniko, the usual alternative, was archived by Google in 2025 |
+| The build writes a **file first**, and pushes only after Trivy passes | The gate this project had from the start: a fixable HIGH or CRITICAL never reaches ECR. Pushing first and deleting after would be a weaker promise |
+| The agent pod carries **one container per tool** | Each tool is a pinned upstream image - the AWS CLI, Helm, promtool, Trivy, BuildKit - instead of one image of our own that would have to be built before it could build anything |
+| ECR credentials come from the **pod's own identity** | The AWS CLI container mints a registry token with its IRSA role and writes it where BuildKit reads it. No key exists to leak |
+| The controller is reached **through the ingress**, with the same certificate as the app | It used to be a public IP on port 8080 with no TLS. The source-range limit the security group enforced is now an ingress annotation: GitHub's webhook ranges, plus whoever runs the apply |
 
-Both webhooks are Terraform resources (`terraform/github.tf`) pointing at DNS names, so replacing the instance does not invalidate them.
+Both webhooks are Terraform resources (`terraform/github.tf`) pointing at DNS names, so a rebuild does not invalidate them.
 
 ---
 

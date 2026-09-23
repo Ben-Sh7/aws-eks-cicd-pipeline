@@ -124,18 +124,6 @@ variable "node_max_pods" {
   default     = 50
 }
 
-variable "jenkins_instance_type" {
-  description = "EC2 instance type for Jenkins"
-  type        = string
-  default     = "t2.medium"
-}
-
-variable "jenkins_root_volume_size" {
-  description = "Root volume size for Jenkins EC2 (GB)"
-  type        = number
-  default     = 20
-}
-
 variable "ingress_nginx_chart_version" {
   description = "Pinned ingress-nginx Helm chart version"
   type        = string
@@ -332,4 +320,52 @@ variable "trivy_operator_chart_version" {
   description = "Pinned trivy-operator Helm chart version. Jenkins scans our two images at build time; this scans everything actually running, including images nobody here built, and rescans as new vulnerabilities are published."
   type        = string
   default     = "0.36.0"
+}
+
+variable "jenkins_chart_version" {
+  description = "Pinned Jenkins Helm chart version. Jenkins runs in the cluster, so a build is a pod that appears, works and disappears - there is no machine sitting idle between builds."
+  type        = string
+  default     = "5.9.63"
+}
+
+variable "jenkins_github_plugin_version" {
+  description = "Jenkins GitHub plugin. Receives the webhook and verifies its signature."
+  type        = string
+  default     = "1.47.0"
+}
+
+variable "jenkins_job_dsl_plugin_version" {
+  description = "Jenkins Job DSL plugin. Lets the pipeline job itself be declared in configuration, so nothing is created by hand in the UI."
+  type        = string
+  default     = "3732.v9a_c49a_61a_313"
+}
+
+variable "jenkins_prometheus_plugin_version" {
+  description = "Jenkins Prometheus plugin. Exposes queue length, build durations and executor counts for the same Prometheus that watches everything else."
+  type        = string
+  default     = "860.v532442b_44e9a_"
+}
+
+variable "jenkins_node_instance_type" {
+  description = "Instance type for the Jenkins node group. Builds are memory-hungry - a Next.js build alone can take a couple of gigabytes."
+  type        = string
+  default     = "t3.large"
+}
+
+variable "jenkins_node_max_size" {
+  description = "How far the Jenkins node group may scale out. One node is always up for the controller; the autoscaler adds more only when builds queue."
+  type        = number
+  default     = 3
+}
+
+variable "jenkins_storage_size" {
+  description = "Disk for JENKINS_HOME. Small on purpose: the configuration is code, and a destroy takes the history with it."
+  type        = string
+  default     = "8Gi"
+}
+
+variable "ci_revision" {
+  description = "Branch Jenkins builds. Stays on main; point it at a branch with -var=ci_revision=<branch> to try a Jenkinsfile change before merging it, since Jenkins reads the repository rather than the machine running the apply."
+  type        = string
+  default     = "main"
 }

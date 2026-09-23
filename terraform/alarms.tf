@@ -153,49 +153,6 @@ resource "aws_cloudwatch_metric_alarm" "rds" {
   tags          = local.common_tags
 }
 
-resource "aws_cloudwatch_metric_alarm" "jenkins_status_check" {
-  alarm_name          = "${local.project_name}-jenkins-status-check"
-  alarm_description   = "The Jenkins instance is failing an EC2 status check"
-  namespace           = "AWS/EC2"
-  metric_name         = "StatusCheckFailed"
-  comparison_operator = "GreaterThanThreshold"
-  threshold           = 0
-  statistic           = "Maximum"
-  period              = 300
-  evaluation_periods  = 2
-  treat_missing_data  = "breaching"
-
-  dimensions = {
-    InstanceId = aws_instance.jenkins.id
-  }
-
-  alarm_actions = [aws_sns_topic.alerts.arn]
-  ok_actions    = [aws_sns_topic.alerts.arn]
-  tags          = local.common_tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "jenkins_cpu" {
-  alarm_name          = "${local.project_name}-jenkins-cpu"
-  alarm_description   = "Jenkins CPU above 85% for 15 minutes - a build is stuck or the instance is undersized"
-  namespace           = "AWS/EC2"
-  metric_name         = "CPUUtilization"
-  comparison_operator = "GreaterThanThreshold"
-  threshold           = 85
-  unit                = "Percent"
-  statistic           = "Average"
-  period              = 300
-  evaluation_periods  = 3
-  treat_missing_data  = "notBreaching"
-
-  dimensions = {
-    InstanceId = aws_instance.jenkins.id
-  }
-
-  alarm_actions = [aws_sns_topic.alerts.arn]
-  ok_actions    = [aws_sns_topic.alerts.arn]
-  tags          = local.common_tags
-}
-
 resource "aws_budgets_budget" "monthly" {
   name         = "${local.project_name}-monthly"
   budget_type  = "COST"

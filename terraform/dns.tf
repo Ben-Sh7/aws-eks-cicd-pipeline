@@ -22,7 +22,7 @@ locals {
 
 resource "aws_acm_certificate" "main" {
   domain_name               = local.app_fqdn
-  subject_alternative_names = [local.argocd_fqdn]
+  subject_alternative_names = [local.argocd_fqdn, local.jenkins_fqdn]
   validation_method         = "DNS"
 
   lifecycle {
@@ -99,6 +99,10 @@ resource "aws_route53_record" "jenkins" {
   zone_id = data.aws_route53_zone.main.zone_id
   name    = local.jenkins_fqdn
   type    = "A"
-  ttl     = 60
-  records = [aws_instance.jenkins.public_ip]
+
+  alias {
+    name                   = local.ingress_lb_hostname
+    zone_id                = data.aws_elb_hosted_zone_id.main.id
+    evaluate_target_health = false
+  }
 }
