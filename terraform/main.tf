@@ -327,10 +327,17 @@ resource "aws_iam_role_policy_attachment" "eks_registry_policy" {
   role       = aws_iam_role.eks_node_role.name
 }
 
+resource "aws_cloudwatch_log_group" "eks_cluster" {
+  name              = "/aws/eks/${local.project_name}/cluster"
+  retention_in_days = var.eks_audit_log_retention_days
+  tags              = local.common_tags
+}
+
 resource "aws_eks_cluster" "main" {
-  name     = local.project_name
-  role_arn = aws_iam_role.eks_cluster_role.arn
-  version  = var.kubernetes_version
+  name                      = local.project_name
+  role_arn                  = aws_iam_role.eks_cluster_role.arn
+  version                   = var.kubernetes_version
+  enabled_cluster_log_types = ["audit"]
 
   vpc_config {
     subnet_ids              = [aws_subnet.public_1.id, aws_subnet.public_2.id, aws_subnet.private_1.id, aws_subnet.private_2.id]
@@ -339,7 +346,10 @@ resource "aws_eks_cluster" "main" {
     endpoint_public_access  = true
   }
 
-  depends_on = [aws_iam_role_policy_attachment.eks_cluster_policy]
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_cluster_policy,
+    aws_cloudwatch_log_group.eks_cluster,
+  ]
 
   tags = merge(
     local.common_tags,

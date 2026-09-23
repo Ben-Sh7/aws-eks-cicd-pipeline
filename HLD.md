@@ -179,6 +179,20 @@ The application already writes structured JSON, but a log inside a pod dies with
 
 ---
 
+## Security monitoring
+
+Three layers, each answering a different question.
+
+| | |
+|---|---|
+| The cluster's **audit log** - who did what | Every request to the Kubernetes API is recorded: who asked, for what, and whether it was allowed. EKS writes it to CloudWatch and keeps a week. The log group is a Terraform resource on purpose - EKS creates one by itself otherwise, and leaves it behind after the cluster is gone |
+| **GuardDuty** - is anyone attacking the account | AWS reads CloudTrail, VPC flow logs, DNS and that audit log, and matches them against known attack patterns. It reports rather than blocks: findings of medium severity and above reach the same inbox as the alerts. It sits in the bootstrap stack, so it keeps watching at night, when everything else is destroyed. S3 data events and malware scanning are switched off - both bill by volume and neither earns its keep here |
+| **trivy-operator** - what is running that is vulnerable | Jenkins scans the two images it builds, once, at build time. The operator scans everything actually running - including images nobody here built - and scans again as new vulnerabilities are published. Only HIGH and CRITICAL, and only what has a fix |
+
+Scanning our own images needs ECR credentials, and a pod cannot borrow the node's: the metadata service is one hop away, which is the point of IRSA. The operator's service account carries a role with read access to the two repositories, and the scan jobs inherit it.
+
+---
+
 ## Alerting
 
 `warning` and `critical` alerts go to Slack. The URL is never a Terraform input: External Secrets reads `SLACK_WEBHOOK_URL` out of the hand-maintained credentials entry, copies it into the monitoring namespace, and Alertmanager reads it from a mounted file (`api_url_file`) - so it reaches neither the state file nor a rendered Helm value. Without that key, alerts still reach Alertmanager's own UI.
