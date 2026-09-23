@@ -10,6 +10,7 @@ locals {
     }
 
     operator = {
+      builtInTrivyServer            = true
       scanJobsConcurrentLimit       = 2
       scanJobTimeout                = "10m"
       configAuditScannerEnabled     = true
@@ -20,8 +21,9 @@ locals {
     }
 
     trivy = {
-      severity      = "HIGH,CRITICAL"
-      ignoreUnfixed = true
+      severity            = "HIGH,CRITICAL"
+      ignoreUnfixed       = true
+      storageClassEnabled = false
 
       resources = {
         requests = {
@@ -95,10 +97,7 @@ data "aws_iam_policy_document" "trivy_operator_ecr_read" {
       "ecr:BatchCheckLayerAvailability",
       "ecr:DescribeImages",
     ]
-    resources = [
-      aws_ecr_repository.backend.arn,
-      aws_ecr_repository.frontend.arn,
-    ]
+    resources = ["*"]
   }
 }
 

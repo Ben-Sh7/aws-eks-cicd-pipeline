@@ -189,7 +189,7 @@ Three layers, each answering a different question.
 | **GuardDuty** - is anyone attacking the account | AWS reads CloudTrail, VPC flow logs, DNS and that audit log, and matches them against known attack patterns. It reports rather than blocks: findings of medium severity and above reach the same inbox as the alerts. It sits in the bootstrap stack, so it keeps watching at night, when everything else is destroyed. S3 data events and malware scanning are switched off - both bill by volume and neither earns its keep here |
 | **trivy-operator** - what is running that is vulnerable | Jenkins scans the two images it builds, once, at build time. The operator scans everything actually running - including images nobody here built - and scans again as new vulnerabilities are published. Only HIGH and CRITICAL, and only what has a fix |
 
-Scanning our own images needs ECR credentials, and a pod cannot borrow the node's: the metadata service is one hop away, which is the point of IRSA. The operator's service account carries a role with read access to the two repositories, and the scan jobs inherit it.
+Scanning needs ECR credentials, and a pod cannot borrow the node's: the metadata service is one hop away, which is the point of IRSA. The operator's service account carries a read-only ECR role and the scan jobs inherit it. The role is not narrowed to this project's two repositories, because half of what runs here - the CSI driver, the CNI, kube-proxy - comes out of AWS's own registry, in an AWS account; what it may actually read there is decided by that registry, not by us.
 
 ---
 
