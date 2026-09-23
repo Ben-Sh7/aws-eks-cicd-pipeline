@@ -22,17 +22,7 @@ There is no configuration file to fill in and nothing secret on your machine. Ev
 
 Done once per AWS account. None of it is part of the stack — `terraform destroy` touches none of it, so a rebuild never asks you for anything again.
 
-**a. The state bucket.** Terraform's state is the only record of what exists in the account, and it holds generated passwords, so it does not belong on a laptop. This creates an S3 bucket for it with versioning, KMS encryption, no public access and TLS enforced:
-
-```bash
-cd terraform/bootstrap
-terraform init && terraform apply
-cd ../..
-```
-
-*(S3 bucket names are globally unique. If that one is taken, change `state_bucket_name` in `terraform/bootstrap/main.tf` and `bucket` in `terraform/backend.tf` to match.)*
-
-**b. The three Secrets Manager entries:**
+**a. The three Secrets Manager entries:**
 
 ```bash
 # 1. Plain configuration. Not secret - just the facts about this deployment.
@@ -54,7 +44,21 @@ aws secretsmanager create-secret --name task-manager/secrets --secret-string '{
 aws secretsmanager create-secret --name task-manager/github-token --secret-string 'ghp_...'
 ```
 
-Three entries rather than one because three different readers need them, and none of them should be able to read the others': Terraform reads the configuration, the External Secrets operator reads the credentials, and the token is read only into memory during apply and by the Jenkins instance at boot. Storage costs $0.40 per entry per month, plus $1/month for the state bucket's KMS key.
+Three entries rather than one because three different readers need them, and none of them should be able to read the others': Terraform reads the configuration, the External Secrets operator reads the credentials, and the token is read only into memory during apply and by the Jenkins instance at boot.
+
+Add `"ALERT_EMAIL": "you@example.com"` to the first entry to receive the alerts and the security findings. Without it they are raised and delivered nowhere.
+
+**b. The bootstrap stack.** Terraform's state is the only record of what exists in the account, and it holds generated passwords, so it does not belong on a laptop. This creates an S3 bucket for it with versioning, KMS encryption, no public access and TLS enforced - and switches GuardDuty on for the account:
+
+```bash
+cd terraform/bootstrap
+terraform init && terraform apply
+cd ../..
+```
+
+*(S3 bucket names are globally unique. If that one is taken, change `state_bucket_name` in `terraform/bootstrap/main.tf` and `bucket` in `terraform/backend.tf` to match.)*
+
+GuardDuty lives here rather than in the stack so that it keeps watching the account while the stack is destroyed. It is free for 30 days, then a few dollars a month for an account this size. Storage costs $0.40 per secret per month, plus $1/month for the state bucket's KMS key.
 
 ### Every time
 

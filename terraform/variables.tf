@@ -321,3 +321,15 @@ variable "gitops_revision" {
   type        = string
   default     = "main"
 }
+
+variable "eks_audit_log_retention_days" {
+  description = "How long the cluster's audit log is kept in CloudWatch. It records every request to the Kubernetes API - who asked, for what, and whether it was allowed."
+  type        = number
+  default     = 7
+}
+
+variable "trivy_operator_chart_version" {
+  description = "Pinned trivy-operator Helm chart version. Jenkins scans our two images at build time; this scans everything actually running, including images nobody here built, and rescans as new vulnerabilities are published."
+  type        = string
+  default     = "0.36.0"
+}
