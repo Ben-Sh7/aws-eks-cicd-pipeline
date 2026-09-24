@@ -133,10 +133,11 @@ locals {
                 scriptPath('Jenkinsfile')
               }
             }
-            triggers { githubPush() }
+            triggers {
+              githubPush()
+              scm('H/5 * * * *')
+            }
           }
-
-          queue('task-manager')
         EOT
       },
     ]
