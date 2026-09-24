@@ -38,6 +38,9 @@ spec:
       image: prom/prometheus:v3.0.1
       command: ["cat"]
       tty: true
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
       resources:
         requests:
           cpu: 50m
