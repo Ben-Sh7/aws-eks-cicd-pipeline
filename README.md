@@ -186,26 +186,26 @@ git push → Jenkins builds & scans → ECR → Jenkins commits the tag → Argo
 
 **4. ArgoCD deploys.** A second webhook wakes it, and it syncs the chart to EKS. The backend applies any new database migrations as it starts.
 
-**5. Secrets arrive on their own.** External Secrets Operator pulls the DB credentials and the JWT signing key from Secrets Manager into the cluster. No secret ever passes through Git or Jenkins.
+**5. Secrets arrive on their own.** External Secrets Operator pulls what each namespace needs out of Secrets Manager - the database credentials, the JWT signing key, Grafana's and Jenkins' logins, the GitHub token. No secret is ever committed, and none passes through a Helm value or Terraform state.
 
-**6. Monitoring runs throughout.** Prometheus, Grafana, and Alertmanager. Put `SLACK_WEBHOOK_URL` in the credentials entry and warning + critical alerts go to Slack — Alertmanager reads it from a file the operator writes, so the URL never appears in a Helm value or in Terraform state.
+**6. Monitoring runs throughout.** Prometheus, Grafana, Alertmanager, and Loki for the logs. Put `SLACK_WEBHOOK_URL` in the credentials entry and warning + critical alerts go to Slack — Alertmanager reads it from a file the operator writes, so the URL never appears in a Helm value or in Terraform state. Critical alerts also go to `ALERT_EMAIL`, because one channel is one point of failure.
 
 <details>
 <summary>Details on the webhooks, the first build, alert filtering, and Jenkins' self-setup</summary>
 
 <br>
 
-**The webhooks are Terraform resources.** Both are declared in `terraform/github.tf`, so an apply creates or corrects them, a destroy removes them, and a plan shows it if somebody edits one in the GitHub UI. They point at DNS names, not at IP addresses, so replacing the Jenkins instance does not invalidate them.
+**The webhooks are Terraform resources.** Both are declared in `terraform/github.tf`, so an apply creates or corrects them, a destroy removes them, and a plan shows it if somebody edits one in the GitHub UI. They point at DNS names, not at IP addresses, so a rebuild does not invalidate them.
 
-**The first build starts itself.** ECR is recreated empty on every build, and a push is normally what starts a job — so the Groovy script that creates the job also queues its first run. If it ever fails, press **Build Now** in Jenkins.
+**The first build starts itself.** ECR is recreated empty on every build, and a push is normally what starts a job — so the job polls the repository every five minutes as well as listening for the webhook. That poll is what starts the first build, and it also covers a webhook that never arrives. If it ever fails, press **Build Now** in Jenkins.
 
 **Jenkins skips its own commits.** A build started by a push whose last commit is the `ci: deploy` bump is skipped, so the pipeline cannot trigger itself forever. A build started any other way always runs.
 
 **ArgoCD stays private.** Only its `/api/webhook` path is exposed through the ingress — the UI and API are not. Payloads must be signed with a secret Terraform generates. If the webhook is ever down, ArgoCD's own 180-second poll catches the change anyway.
 
-**Alert noise is filtered.** `Watchdog` and `InfoInhibitor` are dropped. So are the chart's scheduler, controller-manager and etcd rules — EKS runs those on AWS's side where nothing can scrape them, so they'd report "down" forever.
+**Alert noise is filtered.** `InfoInhibitor` is dropped, and so are the chart's scheduler, controller-manager and etcd rules — EKS runs those on AWS's side where nothing can scrape them, so they'd report "down" forever. `Watchdog`, the alert that always fires, is not dropped: it is published to an SNS topic every couple of minutes, and a CloudWatch alarm on its absence is what tells you the alerting itself has died.
 
-**Jenkins configures itself.** No setup wizard. `terraform apply` runs a `user_data` script that installs Jenkins and Docker, plus a Groovy script that creates the admin login, the GitHub credential, and the pipeline job on first boot. The three secrets it needs are pulled from Secrets Manager at boot with the instance's own IAM role — user-data itself carries no secret, because anything in it can be read back from the metadata service by every process on the host.
+**Jenkins configures itself.** No setup wizard, and nothing created by hand. Jenkins runs in the cluster from a Helm release, and its entire configuration is `JCasC`: the admin login, the GitHub credential, the webhook secret and the pipeline job. The four secrets it needs come from Secrets Manager through External Secrets, so they reach neither the Helm values nor the state file. A build is a pod that appears, builds with BuildKit, is scanned by Trivy, and disappears.
 
 </details>
 
@@ -248,11 +248,12 @@ Running the whole stack on your own machine is a convenience, not part of the de
 | **App** | Next.js (React) · NestJS · PostgreSQL · argon2id passwords · JWT sessions |
 | **IaC** | Terraform — VPC, EKS, EC2, ECR, RDS, IAM |
 | **Packaging** | Helm |
-| **CI** | Jenkins + Trivy |
+| **CI** | Jenkins in-cluster + BuildKit + Trivy |
 | **CD** | ArgoCD (GitOps, pull-based) |
 | **Secrets** | External Secrets Operator + IRSA |
 | **Ingress** | ingress-nginx |
-| **Monitoring** | Prometheus · Grafana · Alertmanager |
+| **Monitoring** | Prometheus · Grafana · Alertmanager · Loki |
+| **Security** | GuardDuty · EKS audit log · trivy-operator |
 
 ## Database
 
