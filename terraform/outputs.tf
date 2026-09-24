@@ -23,16 +23,6 @@ output "app_url" {
   description = "The address users open. Live once the first Jenkins build has pushed images and ArgoCD has synced them - about ten minutes after apply finishes."
 }
 
-output "jenkins_url" {
-  value       = "http://${local.jenkins_fqdn}:8080"
-  description = "Jenkins UI (user: admin). Reachable from the IP the apply ran from, and from GitHub's webhook ranges - nowhere else."
-}
-
-output "jenkins_public_ip" {
-  value       = aws_instance.jenkins.public_ip
-  description = "Jenkins public IP, behind the DNS record above"
-}
-
 output "github_repo" {
   value       = local.github_repo
   description = "GitHub repo (owner/repo) the CI and GitOps flow is wired to"

@@ -44,7 +44,7 @@ aws secretsmanager create-secret --name task-manager/secrets --secret-string '{
 aws secretsmanager create-secret --name task-manager/github-token --secret-string 'ghp_...'
 ```
 
-Three entries rather than one because three different readers need them, and none of them should be able to read the others': Terraform reads the configuration, the External Secrets operator reads the credentials, and the token is read only into memory during apply and by the Jenkins instance at boot.
+Three entries rather than one because three different readers need them, and none of them should be able to read the others': Terraform reads the configuration, and the External Secrets operator reads the credentials and hands Jenkins the token it pushes with.
 
 Add `"ALERT_EMAIL": "you@example.com"` to the first entry to receive the alerts and the security findings. Without it they are raised and delivered nowhere.
 
@@ -97,7 +97,7 @@ To roll all three, increment one number:
 terraform apply -var="generated_secret_version=2"
 ```
 
-The app and Grafana pick the new value up from External Secrets within the hour, or immediately on pod restart; Jenkins applies its new password on its next boot. Rotating the JWT key signs everyone out, by design.
+The app and Grafana pick the new value up from External Secrets within the hour, or immediately on pod restart; Jenkins applies its new password when its pod restarts. Rotating the JWT key signs everyone out, by design.
 
 The two webhook signing secrets are the exception: Terraform has to hand the *same* value to GitHub and to the receiver, so it must hold them, and they are in state. That is what the encrypted, versioned, access-controlled bucket in step (a) is for — protecting state is the answer here, not pretending it can be emptied.
 
@@ -132,7 +132,7 @@ You create this one by hand. Jenkins needs it to push, and Terraform needs it to
 5. Copy the `ghp_...` string now — GitHub shows it once
 6. Put it in Secrets Manager — step 3 of [One-time setup](#one-time-setup)
 
-> The token is never a Terraform variable, never in a file, and never in the state file: Terraform reads it into memory during apply to register the webhooks (an `ephemeral` resource, which Terraform is not allowed to persist), and the Jenkins instance reads it at boot with its own IAM role. It is also not in the instance's user-data, which every process on that host can read back through the metadata service.
+> The token is never a Terraform variable, never in a file, and never in the state file: Terraform reads it into memory during apply to register the webhooks (an `ephemeral` resource, which Terraform is not allowed to persist), and External Secrets syncs it into the cluster for Jenkins to push with.
 
 <details>
 <summary>Why those two scopes, and using a fine-grained token</summary>
@@ -182,7 +182,7 @@ git push → Jenkins builds & scans → ECR → Jenkins commits the tag → Argo
 
 **2. Jenkins builds and scans.** Trivy is a gate, not a report — a fixable HIGH or CRITICAL CVE fails the build and nothing reaches ECR.
 
-**3. Jenkins writes the new tag to Git.** This is the handoff. Jenkins has no cluster access, so Git is how it tells ArgoCD what to deploy.
+**3. Jenkins writes the new tag to Git.** This is the handoff. Jenkins cannot deploy - its identity reaches two ECR repositories and nothing else in the cluster - so Git is how it tells ArgoCD what to run.
 
 **4. ArgoCD deploys.** A second webhook wakes it, and it syncs the chart to EKS. The backend applies any new database migrations as it starts.
 
@@ -216,13 +216,13 @@ git push → Jenkins builds & scans → ECR → Jenkins commits the tag → Argo
 | | Where | How to get there |
 |---|---|---|
 | **The app** | `https://app.<domain>` | `terraform output app_url` |
-| **Jenkins** | `http://jenkins.<domain>:8080` | Open from your IP — nobody else can reach it |
+| **Jenkins** | `https://jenkins.<domain>` | Open from your IP — nobody else can reach it |
 | **ArgoCD** | `https://localhost:8081` | `kubectl port-forward -n argocd svc/argocd-server 8081:443` |
 | **Grafana** | `http://localhost:3000` | `kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80` |
 
 `terraform output` prints all of these, with the command that reads each password.
 
-**Jenkins firewall:** port 8080 opens to your IP and GitHub's webhook ranges. Nothing else. There is no SSH — the box is reached through SSM Session Manager.
+**Who may reach Jenkins:** your IP and GitHub's webhook ranges. Nothing else — the ingress refuses the rest.
 
 If your IP changes, re-run `terraform apply`: it looks your address up again and corrects the rule.
 

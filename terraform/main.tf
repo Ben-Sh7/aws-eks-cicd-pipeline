@@ -234,41 +234,6 @@ locals {
   jenkins_ui_cidrs = length(var.jenkins_ui_allowed_cidrs) > 0 ? var.jenkins_ui_allowed_cidrs : ["${trimspace(data.http.my_ip[0].response_body)}/32"]
 }
 
-resource "aws_security_group" "jenkins" {
-  name_prefix = "${local.project_name}-jenkins-"
-  description = "Security group for Jenkins EC2 instance"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description = "Jenkins webhook endpoint - GitHub published hook ranges"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = local.github_hook_cidrs
-  }
-
-  ingress {
-    description = "Jenkins web UI, operator access only"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = local.jenkins_ui_cidrs
-  }
-
-  egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(
-    local.common_tags,
-    { Name = "${local.project_name}-jenkins-sg" }
-  )
-}
-
 resource "aws_iam_role" "eks_cluster_role" {
   name_prefix = "${local.project_name}-eks-cluster-"
 
@@ -438,64 +403,6 @@ resource "aws_eks_node_group" "main" {
     aws_route_table_association.private_1,
     aws_route_table_association.private_2,
   ]
-}
-
-resource "aws_instance" "jenkins" {
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.jenkins_instance_type
-  subnet_id              = aws_subnet.public_1.id
-  vpc_security_group_ids = [aws_security_group.jenkins.id]
-  iam_instance_profile   = aws_iam_instance_profile.jenkins.name
-
-  associate_public_ip_address = true
-
-  root_block_device {
-    volume_size           = var.jenkins_root_volume_size
-    volume_type           = "gp3"
-    delete_on_termination = true
-    tags = merge(
-      local.common_tags,
-      { Name = "${local.project_name}-jenkins-root" }
-    )
-  }
-
-  user_data_replace_on_change = true
-
-  user_data = templatefile("${path.module}/templates/jenkins-user-data.sh.tftpl", {
-    groovy_script = local.jenkins_groovy_script
-    aws_region    = var.aws_region
-    secrets_dir   = local.jenkins_secrets_dir
-
-    github_token_secret_id    = data.aws_secretsmanager_secret.github_token.arn
-    jenkins_admin_secret_id   = aws_secretsmanager_secret.jenkins_admin.arn
-    jenkins_webhook_secret_id = aws_secretsmanager_secret.jenkins_webhook.arn
-  })
-
-  depends_on = [
-    aws_iam_role_policy.jenkins_bootstrap_secrets,
-    aws_secretsmanager_secret_version.jenkins_admin,
-    aws_secretsmanager_secret_version.jenkins_webhook,
-  ]
-
-  tags = merge(
-    local.common_tags,
-    { Name = "${local.project_name}-jenkins" }
-  )
-}
-
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"]
-
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
 }
 
 resource "aws_ecr_repository" "backend" {

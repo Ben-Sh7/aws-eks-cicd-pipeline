@@ -10,7 +10,7 @@ resource "github_repository_webhook" "jenkins" {
   events     = ["push"]
 
   configuration {
-    url          = "http://${local.jenkins_fqdn}:8080/github-webhook/"
+    url          = "https://${local.jenkins_fqdn}/github-webhook/"
     content_type = "json"
     insecure_ssl = false
     secret       = random_password.jenkins_webhook.result

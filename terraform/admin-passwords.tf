@@ -40,8 +40,13 @@ resource "aws_secretsmanager_secret" "jenkins_admin" {
 }
 
 resource "aws_secretsmanager_secret_version" "jenkins_admin" {
-  secret_id                = aws_secretsmanager_secret.jenkins_admin.id
-  secret_string_wo         = ephemeral.aws_secretsmanager_random_password.jenkins_admin.random_password
+  secret_id = aws_secretsmanager_secret.jenkins_admin.id
+
+  secret_string_wo = jsonencode({
+    username = "admin"
+    password = ephemeral.aws_secretsmanager_random_password.jenkins_admin.random_password
+  })
+
   secret_string_wo_version = var.generated_secret_version
 }
 
