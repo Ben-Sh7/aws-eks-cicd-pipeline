@@ -284,6 +284,7 @@ resource "helm_release" "ingress_nginx" {
 
       config = {
         use-forwarded-headers = "true"
+        proxy-real-ip-cidr    = var.vpc_cidr
       }
 
       metrics = {
