@@ -12,6 +12,10 @@ That split is why a compromised build can't reach production, and why `git rever
 
 ![task-manager AWS architecture: a commit becoming a running pod (1-7), and a user request reaching the database (A-E)](docs/architecture.png)
 
+The same system by what each piece does, rather than by where a request goes: the two node groups and what runs in each namespace, what watches them, and which AWS service each one reaches.
+
+![What runs where: two node groups, the namespaces in each, the monitoring stack in the middle, and the AWS services on the right](docs/platform.png)
+
 ---
 
 ## Inside the cluster
@@ -38,6 +42,12 @@ Browser → ingress → frontend → backend → database. Nothing skips a step.
 - RDS accepts port 5432 from the nodes' security group only — not a CIDR, not the internet
 
 **Replicas** are the autoscaler's to decide: backend 3-10, frontend 2-6, on CPU and memory. The chart leaves `replicas` out of both Deployments when autoscaling is on, so nothing fights the HPA over the number.
+
+### The network under it
+
+Which subnet each thing sits in, which route table sends its traffic where, and what a pod's address actually is:
+
+![Network and storage: the VPC and its four subnets, both route tables, the NAT gateway and internet gateway, the pod network, the NetworkPolicy, the volumes, and the security groups](docs/platform-network.png)
 
 ---
 
