@@ -227,7 +227,7 @@ variable "monthly_budget_usd" {
 }
 
 variable "jenkins_ui_allowed_cidrs" {
-  description = "CIDRs allowed to reach the Jenkins UI on 8080. Left empty, Terraform allows exactly the public IP it is running from (looked up at plan time, see data.http.my_ip in main.tf) - never 0.0.0.0/0. GitHub's webhook ranges are allowed separately and do not belong here."
+  description = "CIDRs allowed to reach Jenkins through the ingress. Left empty, Terraform allows exactly the public IP it is running from (looked up at plan time, see data.http.my_ip in main.tf) - never 0.0.0.0/0. GitHub's webhook ranges are allowed separately and do not belong here."
   type        = list(string)
   default     = []
 }

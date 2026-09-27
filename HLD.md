@@ -12,6 +12,10 @@ That split is why a compromised build can't reach production, and why `git rever
 
 ![task-manager AWS architecture: a commit becoming a running pod (1-7), and a user request reaching the database (A-E)](docs/architecture.png)
 
+The same system by what each piece does, rather than by where a request goes: the two node groups and what runs in each namespace, what watches them, and which AWS service each one reaches.
+
+![What runs where: two node groups, the namespaces in each, the monitoring stack in the middle, and the AWS services on the right](docs/platform.png)
+
 ---
 
 ## Inside the cluster
@@ -34,10 +38,16 @@ Browser → ingress → frontend → backend → database. Nothing skips a step.
 - Both app Services are `ClusterIP`. No pod IP, no NodePort, no public IP
 - `ingress-nginx` is the only `LoadBalancer`, so it's the only public entry point
 - The ingress routes to the frontend only. The backend API is never exposed — the frontend forwards a fixed list of routes to it
-- Worker nodes have no public IP, so a bad firewall rule can't expose them
+- No node has a public IP, so a bad firewall rule can't expose one
 - RDS accepts port 5432 from the nodes' security group only — not a CIDR, not the internet
 
-**Replicas:** backend runs 3 (stateless, so it's cheap redundancy), frontend runs 1. Change the number in `values.yaml` and ArgoCD applies it on the next sync.
+**Replicas** are the autoscaler's to decide: backend 3-10, frontend 2-6, on CPU and memory. The chart leaves `replicas` out of both Deployments when autoscaling is on, so nothing fights the HPA over the number.
+
+### The network under it
+
+Which subnet each thing sits in, which route table sends its traffic where, and what a pod's address actually is:
+
+![Network and storage: the VPC and its four subnets, both route tables, the NAT gateway and internet gateway, the pod network, the NetworkPolicy, the volumes, and the security groups](docs/platform-network.png)
 
 ---
 
@@ -94,7 +104,7 @@ That credential belongs to a Google project, not to this infrastructure, so Terr
 
 **CD** — webhook → merge the values files → sync the chart → Kubernetes rolls out
 
-**Secrets** — External Secrets Operator reads two secrets from Secrets Manager over IRSA and writes them into one K8s Secret: the RDS password, which AWS rotates itself and which never enters Terraform state or Git, and the JWT signing key, which Terraform generates.
+**Secrets** — External Secrets Operator reads Secrets Manager over IRSA and writes what each namespace needs: the RDS password that AWS rotates itself, the JWT signing key, the app's own database role, the Google sign-in client, the read-only role the database exporter uses, Grafana's and Jenkins' logins, the webhook secret, the GitHub token and the Slack webhook URL. None of them enters Terraform state or Git.
 
 <details>
 <summary>Why ArgoCD ignores most commits — and reverts changes you never committed</summary>
@@ -152,7 +162,7 @@ The chart refuses to render if any of them is missing, so a gap is a clear sync 
 
 | Component | Tool | Job |
 |---|---|---|
-| Infra + add-ons | Terraform | VPC, EKS, EC2, ECR, RDS, and the four cluster add-ons |
+| Infra + add-ons | Terraform | VPC, EKS, EC2, ECR, RDS, and everything the cluster runs before the app does |
 | CI | Jenkins | In-cluster, on its own node group: build, scan, push, bump the tag file |
 | CD | ArgoCD | Apply the chart, self-heal drift, prune |
 | App | Next.js + NestJS | Frontend with a session layer, and the API behind it |
@@ -167,7 +177,7 @@ The chart refuses to render if any of them is missing, so a gap is a clear sync 
 
 ## Logs
 
-The application already writes structured JSON, but a log inside a pod dies with it. Alloy runs on every node, tails the pods' log files, labels each line with namespace, pod and container, and ships it to Loki; Grafana queries Loki through a data source it ships with, so a spike on a graph and the lines behind it are one click apart.
+The application already writes structured JSON, but a log inside a pod dies with it. Alloy runs on every app node, tails the pods' log files, labels each line with namespace, pod and container, and ships it to Loki; Grafana queries Loki through a data source it ships with, so a spike on a graph and the lines behind it are one click apart.
 
 | Decision | Why |
 |---|---|
@@ -185,7 +195,7 @@ Three layers, each answering a different question.
 
 | | |
 |---|---|
-| The cluster's **audit log** - who did what | Every request to the Kubernetes API is recorded: who asked, for what, and whether it was allowed. EKS writes it to CloudWatch and keeps a week. The log group is a Terraform resource on purpose - EKS creates one by itself otherwise, and leaves it behind after the cluster is gone |
+| The cluster's **audit log** - who did what | Every request to the Kubernetes API is recorded: who asked, for what, and whether it was allowed. EKS writes it to CloudWatch, with a week's retention - though in an environment rebuilt daily the log group goes with the destroy long before that. The log group is a Terraform resource on purpose - EKS creates one by itself otherwise, and leaves it behind after the cluster is gone |
 | **GuardDuty** - is anyone attacking the account | AWS reads CloudTrail, VPC flow logs, DNS and that audit log, and matches them against known attack patterns. It reports rather than blocks: findings of medium severity and above reach the same inbox as the alerts. It sits in the bootstrap stack, so it keeps watching at night, when everything else is destroyed. S3 data events and malware scanning are switched off - both bill by volume and neither earns its keep here |
 | **trivy-operator** - what is running that is vulnerable | Jenkins scans the two images it builds, once, at build time. The operator scans everything actually running - including images nobody here built - and scans again as new vulnerabilities are published. Only HIGH and CRITICAL, and only what has a fix |
 
@@ -222,7 +232,7 @@ Two things are silenced on purpose:
 
 | | |
 |---|---|
-| Worker nodes | Private subnets, no public IP. Egress via NAT, except in-region S3 (gateway endpoint) |
+| Nodes, both groups | Private subnets, no public IP. Egress via NAT, except in-region S3 (gateway endpoint) |
 | App | HTTPS only - the load balancer terminates TLS, and nginx redirects port 80. The backend is `ClusterIP` only |
 | Jenkins | HTTPS through the ingress, limited to your IP + GitHub's webhook ranges. Nothing else |
 | Jenkins host access | **None.** There is no machine to log in to |
@@ -233,8 +243,8 @@ Two things are silenced on purpose:
 
 | | |
 |---|---|
-| Jenkins | IAM instance profile, ECR push only. No static keys, no cluster access |
-| External Secrets | IRSA, read-only, scoped to exactly two secret ARNs |
+| Jenkins builds | IRSA on the agent's service account: push to two ECR repositories, nothing else. No static keys |
+| External Secrets | IRSA, read-only, scoped to the exact secret ARNs it needs and no others |
 | RDS | Not public, encrypted, password created and rotated by AWS |
 | App users | argon2id password hashes, rotating refresh tokens, `httpOnly` cookies |
 
@@ -247,13 +257,11 @@ Two things are silenced on purpose:
 
 **Trivy gates the build.** HIGH and CRITICAL CVEs fail it before anything reaches ECR.
 
-Trivy itself is pinned to a fixed version rather than pulled from a floating `latest`, and its tarball is checked against the published SHA-256 before it is installed. The bootstrap runs under `set -eo pipefail`, so a mismatch aborts it instead of leaving the build to scan with an unverified binary.
+Trivy runs as a pinned image, like every other tool in the build pod, rather than a floating `latest` - so the scanner that passes a build today is the one that passed it last week.
 
 **Runtime images** run a current Node LTS with `npm` removed from the final stage. npm's bundled dependencies were the last HIGH findings standing between the image and a clean scan. The compiled code is owned by root, so the process cannot modify it.
 
 **Database connections use TLS with certificate verification** against the Amazon RDS CA bundle baked into the image. Not `rejectUnauthorized: false`, which encrypts without authenticating.
-
-**Jenkins' apt key is pinned and its key id verified** before the repo is trusted. A key rotation fails the bootstrap loudly instead of silently installing from an unsigned source.
 
 </details>
 
@@ -266,11 +274,11 @@ terraform destroy
 ```
 
 The dependency graph orders the network half: the Helm releases go first, then
-the node group (~5 min), then the cluster (~10 min), and only then the subnets
+both node groups (~8 min), then the cluster (~3 min), and only then the subnets
 and the VPC. By the time anything touches the network, the load balancer
 Kubernetes created has been gone for a quarter of an hour, so no wait or retry
-belongs between them. A destroy run on 2026-09-22 confirmed it: 97 resources, no
-DependencyViolation.
+belongs between them. The destroy on 2026-09-24 confirmed it: 111 resources, no
+DependencyViolation and nothing left behind.
 
 **Why the monitoring volumes used to be left behind.** The nodes reach the AWS
 API through the NAT, and nothing referenced the route to it, so Terraform deleted
@@ -289,7 +297,7 @@ What is arranged:
 |---|---|
 | The node group **depends on the NAT route** and on the private subnets' route-table links; the NAT, on its own subnet's link | Nothing else references them, so without this Terraform deletes them in the first second of a destroy, and everything still running on the nodes loses its way to the AWS API |
 | The ArgoCD `Application` carries **no finalizer** | Helm deletes the Application and the ArgoCD controller in the same uninstall. A finalizer would wait for a controller that is already going, and hang until the timeout. Nothing is lost by dropping it: the app owns only ClusterIP Services, Deployments and an Ingress - no cloud resources |
-| The `monitoring` namespace is a **Terraform resource**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the Prometheus, Grafana and Alertmanager PVCs live in it. Deleting the namespace deletes the PVCs |
+| The `monitoring` and `jenkins` namespaces are **Terraform resources**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the volumes of Prometheus, Grafana, Alertmanager, Loki and Jenkins live in them. Deleting the namespace deletes the claims |
 | Between that namespace and the EBS CSI driver, the destroy **waits until the volumes are gone** | A PersistentVolume is cluster-scoped and outlives its namespace, and the CSI driver removes the volume asynchronously afterwards. The destroy waits for each of the cluster's volumes to be deleted, up to 10 minutes; if one is not, it stops there - with the driver still running - instead of leaving it behind |
 | The CSI addon depends on **both node groups**, and on its policy attachment, not only its role | Without the node groups it can be torn down while a volume is still attached - the Jenkins node was being deleted in the same second as its own namespace, and only finished later by luck. Without the attachment, nothing references it and Terraform removes it in the first second of a destroy, leaving the driver without permission for the rest of it |
 | The vpc-cni addon has `preserve = true` | Nothing orders it after the CSI chain; preserved, `aws-node` goes with the cluster at the very end instead of mid-teardown |
@@ -320,7 +328,6 @@ Decisions that are not obvious from reading the code, and that something depends
 | The ArgoCD Application comes from the `argocd-apps` chart, in a release ordered after argo-cd | A chart cannot create a custom resource whose CRD it installs in that same release: Helm validates the whole manifest against the cluster before installing anything, so the kind does not exist yet. A `kubernetes_manifest` does not work either - it is evaluated at plan time, before the cluster exists |
 | Kubernetes/Helm providers authenticate through `aws eks get-token`, not `aws_eks_cluster_auth` | That data source resolves once per plan and is stored in state, so the next run configures the provider with a token minted hours earlier. EKS tokens live 15 minutes |
 | The SNS topics carry no KMS key | The AWS managed key for SNS grants use to IAM principals only - CloudWatch and Budgets cannot publish through it, and their notifications would fail silently. A customer managed key would cost a dollar a month and linger for a week after every destroy. The messages carry alarm names, not data |
-| No SSH rule on the Jenkins security group | The instance is reached through SSM Session Manager, which needs no inbound port. Port 22 open on a host holding the GitHub token and ECR push rights was the largest hole here |
 | `aws_route53_record.cert_validation` sets `allow_overwrite` | A stale validation record from a previous certificate in the same zone would otherwise block the apply |
 | Grafana's admin login comes from an ExternalSecret, not a Helm value | A Helm value is an argument of the release resource and would be recorded in state, undoing the write-only argument that generated it |
 
@@ -332,9 +339,9 @@ Decisions that are not obvious from reading the code, and that something depends
 |---|---|
 | Two webhook signing secrets are in Terraform state | Unavoidable: Terraform hands the same value to GitHub and to the receiver, and an ephemeral value cannot reach an ordinary resource argument. Everything else it generates is written with a write-only argument and never recorded — see [State](#state) |
 | The domain must already be a delegated Route53 zone | Terraform looks the zone up rather than creating it; a zone created in the same apply would not be delegated, and certificate validation would wait on DNS nobody can answer |
-| A rebuild changes the Jenkins IP | The DNS record follows it, so the webhook keeps working, but the record's 60s TTL means a minute of stale answers |
 | RDS is single-AZ | `multi_az = true` when uptime beats cost |
 | One NAT gateway, not one per AZ | ~$32/month instead of ~$64. An AZ outage takes egress for both |
+| Jenkins' own logs are not in Loki | Alloy does not tolerate the Jenkins nodes' taint, so it never runs there, and it only reads the node it runs on. The controller's and the build pods' logs stay on those nodes; `kubectl logs -n jenkins` is the only view until Alloy gets the same toleration Jenkins has |
 | S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
@@ -348,7 +355,7 @@ Decisions that are not obvious from reading the code, and that something depends
 
 Jenkins runs in the cluster, on a node group of its own. A build is a pod that appears, works and disappears - so two builds do not queue behind one machine, and nothing sits idle between them. The node group carries a taint, so only Jenkins lands there: a heavy build cannot starve the app or the monitoring, and the bill shows what CI costs on its own.
 
-The controller's entire configuration is `JCasC` - the admin account, the two credentials, the GitHub plugin's webhook secret, and the pipeline job itself. Nothing is created by hand in the UI, and nothing survives that was not declared. The job's first build is queued by that same configuration, because ECR is empty after every rebuild and nothing else would trigger one.
+The controller's entire configuration is `JCasC` - the admin account, the two credentials, the GitHub plugin's webhook secret, and the pipeline job itself. Nothing is created by hand in the UI, and nothing survives that was not declared. That job polls the repository every five minutes as well as listening for the webhook, which is what starts the first build: ECR is empty after every rebuild and no push is coming. Job DSL's `queue()` looked like the obvious way and does nothing inside JCasC - a live test on an empty JENKINS_HOME is what showed it.
 
 Its four secrets - the admin username and password, the webhook signing secret and the GitHub token - come from Secrets Manager through External Secrets, as everywhere else here. JCasC reads them from files, so they reach neither the Helm values nor the state file.
 
