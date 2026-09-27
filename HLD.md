@@ -233,7 +233,7 @@ Two things are silenced on purpose:
 | | |
 |---|---|
 | Nodes, both groups | Private subnets, no public IP. Egress via NAT, except in-region S3 (gateway endpoint) |
-| App | HTTPS only - the load balancer terminates TLS, and nginx redirects port 80. The backend is `ClusterIP` only |
+| App | HTTPS only - the load balancer terminates TLS and accepts TLS 1.2 only, and nginx redirects port 80. The backend is `ClusterIP` only |
 | Jenkins | HTTPS through the ingress, limited to your IP + GitHub's webhook ranges. Nothing else |
 | Jenkins host access | **None.** There is no machine to log in to |
 | Grafana | ClusterIP. `port-forward` only |
@@ -322,6 +322,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | Decision | Why |
 |---|---|
 | ingress-nginx service: `targetPorts.https = http` | TLS terminates on the load balancer, so the controller receives plain HTTP on both ports. Without this it expects a second TLS handshake on 443 and every request fails |
+| ingress-nginx service: `aws-load-balancer-ssl-negotiation-policy` | The Service creates a **Classic** Load Balancer, and without this annotation its HTTPS listener gets AWS's 2016 default policy, which still accepts TLS 1.0 and 1.1. `ELBSecurityPolicy-TLS-1-2-2017-01` leaves TLS 1.2 only; a TLS 1.1 handshake is refused |
 | ingress-nginx config: `use-forwarded-headers` | With TLS terminated upstream, `X-Forwarded-Proto` is the only way nginx can tell HTTP from HTTPS - and the only way a redirect-to-HTTPS rule avoids looping |
 | The Prometheus Operator CRDs are a release of their own, installed first | ingress-nginx and External Secrets ship ServiceMonitors, and they install before kube-prometheus-stack - which needs External Secrets for its own secrets. Letting the stack install the CRDs is a cycle; a separate CRD release breaks it. The stack runs with `crds.enabled = false` |
 | The Helm releases are chained with `depends_on` | The provider shares one repository cache across resources; installing them in parallel makes all but one fail with "no cached repo found" on a cold cache. external-secrets also has to precede monitoring, whose release ships an ExternalSecret |
