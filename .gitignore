@@ -36,3 +36,5 @@ crash*.log
 docs/*
 !docs/architecture.png
 !docs/inside-the-cluster.png
+!docs/platform.png
+!docs/platform-network.png
