@@ -104,7 +104,7 @@ That credential belongs to a Google project, not to this infrastructure, so Terr
 
 **CD** — webhook → merge the values files → sync the chart → Kubernetes rolls out
 
-**Secrets** — External Secrets Operator reads Secrets Manager over IRSA and writes what each namespace needs: the RDS password that AWS rotates itself, the JWT signing key, the app's own database role, Grafana's and Jenkins' logins, the webhook secret and the GitHub token. None of them enters Terraform state or Git.
+**Secrets** — External Secrets Operator reads Secrets Manager over IRSA and writes what each namespace needs: the RDS password that AWS rotates itself, the JWT signing key, the app's own database role, the Google sign-in client, the read-only role the database exporter uses, Grafana's and Jenkins' logins, the webhook secret, the GitHub token and the Slack webhook URL. None of them enters Terraform state or Git.
 
 <details>
 <summary>Why ArgoCD ignores most commits — and reverts changes you never committed</summary>
@@ -177,7 +177,7 @@ The chart refuses to render if any of them is missing, so a gap is a clear sync 
 
 ## Logs
 
-The application already writes structured JSON, but a log inside a pod dies with it. Alloy runs on every node, tails the pods' log files, labels each line with namespace, pod and container, and ships it to Loki; Grafana queries Loki through a data source it ships with, so a spike on a graph and the lines behind it are one click apart.
+The application already writes structured JSON, but a log inside a pod dies with it. Alloy runs on every app node, tails the pods' log files, labels each line with namespace, pod and container, and ships it to Loki; Grafana queries Loki through a data source it ships with, so a spike on a graph and the lines behind it are one click apart.
 
 | Decision | Why |
 |---|---|
@@ -341,6 +341,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | The domain must already be a delegated Route53 zone | Terraform looks the zone up rather than creating it; a zone created in the same apply would not be delegated, and certificate validation would wait on DNS nobody can answer |
 | RDS is single-AZ | `multi_az = true` when uptime beats cost |
 | One NAT gateway, not one per AZ | ~$32/month instead of ~$64. An AZ outage takes egress for both |
+| Jenkins' own logs are not in Loki | Alloy does not tolerate the Jenkins nodes' taint, so it never runs there, and it only reads the node it runs on. The controller's and the build pods' logs stay on those nodes; `kubectl logs -n jenkins` is the only view until Alloy gets the same toleration Jenkins has |
 | S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
