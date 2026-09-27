@@ -211,7 +211,8 @@ locals {
     }
 
     controller = {
-      type = "daemonset"
+      type        = "daemonset"
+      tolerations = local.jenkins_tolerations
 
       volumes = {
         extra = [
