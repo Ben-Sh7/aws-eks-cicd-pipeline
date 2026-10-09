@@ -550,13 +550,19 @@ resource "helm_release" "argocd_app" {
 
         destination = {
           server    = "https://kubernetes.default.svc"
-          namespace = "default"
+          namespace = "task-manager"
         }
 
         syncPolicy = {
           automated = {
             selfHeal = true
             prune    = true
+          }
+          syncOptions = ["CreateNamespace=true"]
+          managedNamespaceMetadata = {
+            labels = {
+              "pod-security.kubernetes.io/enforce" = "restricted"
+            }
           }
         }
       }
