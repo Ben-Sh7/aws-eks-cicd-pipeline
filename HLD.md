@@ -251,6 +251,8 @@ Two things are silenced on purpose:
 
 **Both webhooks verify GitHub's HMAC signature.** Reaching the port isn't enough to trigger anything — so the firewall rules above are a second layer, not the only one.
 
+**Every disk is encrypted at rest.** The nodes' root disks through the launch template, the volumes Kubernetes creates (Prometheus, Grafana, Alertmanager, Loki, Jenkins) through the StorageClass, RDS by its own flag. Both are stated in the code rather than left to the account's default, which is off unless someone switched it on.
+
 <details>
 <summary>Supply chain and runtime hardening</summary>
 

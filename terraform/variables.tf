@@ -124,6 +124,12 @@ variable "node_max_pods" {
   default     = 50
 }
 
+variable "node_disk_size" {
+  description = "Root disk of every node, in GiB. Holds the OS and the images the node has pulled. Declaring the disk in the launch template is what lets it be encrypted; the account's own default leaves volumes unencrypted."
+  type        = number
+  default     = 20
+}
+
 variable "ingress_nginx_chart_version" {
   description = "Pinned ingress-nginx Helm chart version"
   type        = string

@@ -264,6 +264,17 @@ resource "aws_launch_template" "eks_nodes" {
   EOT
   )
 
+  block_device_mappings {
+    device_name = "/dev/xvda"
+
+    ebs {
+      volume_size           = var.node_disk_size
+      volume_type           = "gp3"
+      encrypted             = true
+      delete_on_termination = true
+    }
+  }
+
   tag_specifications {
     resource_type = "instance"
     tags = merge(
