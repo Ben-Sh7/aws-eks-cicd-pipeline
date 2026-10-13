@@ -40,6 +40,7 @@ Browser → ingress → frontend → backend → database. Nothing skips a step.
 - The ingress routes to the frontend only. The backend API is never exposed — the frontend forwards a fixed list of routes to it
 - No node has a public IP, so a bad firewall rule can't expose one
 - RDS accepts port 5432 from the nodes' security group only — not a CIDR, not the internet
+- Of the pods on those nodes, three may open it: the backend, the job that creates its database role, and the metrics exporter. RDS sits in two subnets of its own, so a NetworkPolicy can name it by address range: every other namespace carries `keep-off-the-database`, which allows any destination except those two ranges
 
 **Replicas** are the autoscaler's to decide: backend 3-10, frontend 2-6, on CPU and memory. The chart leaves `replicas` out of both Deployments when autoscaling is on, so nothing fights the HPA over the number.
 
@@ -356,6 +357,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
 | CI lives in the cluster it deploys to | A broken cluster is a broken CI, and a push while the stack is down is neither built nor scanned until the next apply. The trade for elastic build capacity and one way of running everything |
 | Build history dies with the environment | JENKINS_HOME is a volume the destroy takes. The configuration is code, so a rebuild returns an identical Jenkins - with an empty history |
+| `keep-off-the-database` is applied per namespace, by a list in `network-policy.tf` | A NetworkPolicy cannot span namespaces, so a namespace added later reaches the database until it joins the list. Pods on the host network - the node's own agents, such as `aws-node` and node-exporter - are outside every NetworkPolicy and still reach it, as the nodes do |
 | The cluster API answers one IP | If your address changes while the stack is up, Terraform can no longer reach the cluster to refresh it. `terraform apply -target=aws_eks_cluster.main` updates the allowlist first (it talks to AWS, not to the cluster); a plain apply or destroy works after it |
 | ECR repository names are fixed strings, not derived from `project_name` | The Jenkinsfile names the same repositories, and nothing passes the Terraform value to it. Renaming the project means editing both |
 

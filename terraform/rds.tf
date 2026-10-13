@@ -1,6 +1,6 @@
 resource "aws_db_subnet_group" "postgres" {
   name_prefix = "${local.project_name}-db-"
-  subnet_ids  = [aws_subnet.private_1.id, aws_subnet.private_2.id]
+  subnet_ids  = [aws_subnet.db_1.id, aws_subnet.db_2.id]
 
   tags = merge(
     local.common_tags,

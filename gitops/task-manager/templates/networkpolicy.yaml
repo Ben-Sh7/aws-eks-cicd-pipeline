@@ -47,6 +47,13 @@ spec:
     - ports:
         - port: {{ .Values.config.dbPort | int }}
           protocol: TCP
+      {{- with .Values.networkPolicy.databaseCidrs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -138,6 +145,13 @@ spec:
     - ports:
         - port: {{ .Values.config.dbPort | int }}
           protocol: TCP
+      {{- with .Values.networkPolicy.databaseCidrs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      {{- end }}
     - ports:
         - port: 443
           protocol: TCP

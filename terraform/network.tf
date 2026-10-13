@@ -7,6 +7,8 @@ locals {
     "kubernetes.io/role/internal-elb"             = "1"
     "kubernetes.io/cluster/${local.project_name}" = "shared"
   }
+
+  db_subnet_cidrs = [var.db_subnet_1_cidr, var.db_subnet_2_cidr]
 }
 
 resource "aws_vpc" "main" {
@@ -120,6 +122,47 @@ resource "aws_route_table_association" "private_1" {
 resource "aws_route_table_association" "private_2" {
   subnet_id      = aws_subnet.private_2.id
   route_table_id = aws_route_table.private.id
+}
+
+resource "aws_subnet" "db_1" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.db_subnet_1_cidr
+  availability_zone = "${var.aws_region}a"
+
+  tags = merge(
+    local.common_tags,
+    { Name = "${local.project_name}-db-1" }
+  )
+}
+
+resource "aws_subnet" "db_2" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.db_subnet_2_cidr
+  availability_zone = "${var.aws_region}b"
+
+  tags = merge(
+    local.common_tags,
+    { Name = "${local.project_name}-db-2" }
+  )
+}
+
+resource "aws_route_table" "db" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(
+    local.common_tags,
+    { Name = "${local.project_name}-db-rt" }
+  )
+}
+
+resource "aws_route_table_association" "db_1" {
+  subnet_id      = aws_subnet.db_1.id
+  route_table_id = aws_route_table.db.id
+}
+
+resource "aws_route_table_association" "db_2" {
+  subnet_id      = aws_subnet.db_2.id
+  route_table_id = aws_route_table.db.id
 }
 
 resource "aws_eip" "nat" {

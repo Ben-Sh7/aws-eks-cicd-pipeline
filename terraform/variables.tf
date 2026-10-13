@@ -35,15 +35,27 @@ variable "public_subnet_2_cidr" {
 }
 
 variable "private_subnet_1_cidr" {
-  description = "Private subnet 1 CIDR block (RDS)"
+  description = "Private subnet 1 CIDR block - the nodes, and the pods, which take their addresses from the node's subnet"
   type        = string
   default     = "10.0.11.0/24"
 }
 
 variable "private_subnet_2_cidr" {
-  description = "Private subnet 2 CIDR block (RDS)"
+  description = "Private subnet 2 CIDR block - the nodes, and the pods, which take their addresses from the node's subnet"
   type        = string
   default     = "10.0.12.0/24"
+}
+
+variable "db_subnet_1_cidr" {
+  description = "Database subnet 1 CIDR block. Nothing but RDS lives here, so a NetworkPolicy can keep a pod off the database by this range alone, without knowing the database's address."
+  type        = string
+  default     = "10.0.21.0/24"
+}
+
+variable "db_subnet_2_cidr" {
+  description = "Database subnet 2 CIDR block. RDS requires a subnet group spanning two availability zones even for a single-AZ instance."
+  type        = string
+  default     = "10.0.22.0/24"
 }
 
 variable "rds_engine_version" {

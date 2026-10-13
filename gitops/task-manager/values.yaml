@@ -102,6 +102,10 @@ secrets:
 # ignores them, where it would give a false sense of isolation.
 networkPolicy:
   enabled: true
+  # Address ranges the database lives in, passed in by Terraform: the backend
+  # and the bootstrap job may open 5432 there and nowhere else. Empty allows
+  # 5432 to any address, for a local install whose database has no fixed range.
+  databaseCidrs: []
 
 # Alerts on the app itself, evaluated by the Prometheus that Terraform installs.
 # They read kube-state-metrics and the ingress controller rather than the app,

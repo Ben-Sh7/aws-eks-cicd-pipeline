@@ -532,7 +532,7 @@ resource "helm_release" "argocd_app" {
           path           = "gitops/task-manager"
           helm = {
             valueFiles = ["values.yaml", "values-images.yaml"]
-            parameters = [
+            parameters = concat([
               { name = "config.dbHost", value = aws_db_instance.postgres.address },
               { name = "config.appUrl", value = local.app_url },
               { name = "secrets.awsRegion", value = var.aws_region },
@@ -544,7 +544,9 @@ resource "helm_release" "argocd_app" {
               { name = "backend.image.repository", value = aws_ecr_repository.backend.repository_url },
               { name = "frontend.image.repository", value = aws_ecr_repository.frontend.repository_url },
               { name = "ingress.host", value = local.app_fqdn },
-            ]
+              ], [
+              for i, cidr in local.db_subnet_cidrs : { name = "networkPolicy.databaseCidrs[${i}]", value = cidr }
+            ])
           }
         }
 
