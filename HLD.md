@@ -268,7 +268,7 @@ Two things are silenced on purpose:
 
 **What is pushed is the file Trivy scanned.** BuildKit writes each image to a file, Trivy scans the file, and `crane` uploads that same file. Building a second time for the push would resolve the base image's tag again and download the RDS certificate bundle again, so the pushed image could differ from the scanned one without anyone noticing.
 
-Trivy runs as a pinned image, like every other tool in the build pod, rather than a floating `latest` - so the scanner that passes a build today is the one that passed it last week.
+Trivy runs as a pinned image, like every other tool in the build pod, rather than a floating `latest` - so the scanner that passes a build today is the one that passed it last week. That includes the `jnlp` agent container, which the Kubernetes plugin would otherwise pick by itself and change with every plugin update.
 
 **Runtime images** run a current Node LTS with `npm` removed from the final stage. npm's bundled dependencies were the last HIGH findings standing between the image and a clean scan. The compiled code is owned by root, so the process cannot modify it.
 
@@ -361,6 +361,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
 | CI lives in the cluster it deploys to | A broken cluster is a broken CI, and a push while the stack is down is neither built nor scanned until the next apply. The trade for elastic build capacity and one way of running everything |
+| trivy-operator does not see the build pod's tools | A build pod lives two or three minutes and is gone before the operator's scan of it finishes, and its report goes with it. The tools are pinned, so they change only in a commit - check them with a local `trivy image` when bumping one. On 2026-10-13 that showed the agent at 12 critical findings and promtool at 4, fixed by newer versions |
 | Build history dies with the environment | JENKINS_HOME is a volume the destroy takes. The configuration is code, so a rebuild returns an identical Jenkins - with an empty history |
 | `keep-off-the-database` is applied per namespace, by a list in `network-policy.tf` | A NetworkPolicy cannot span namespaces, so a namespace added later reaches the database until it joins the list. Pods on the host network - the node's own agents, such as `aws-node` and node-exporter - are outside every NetworkPolicy and still reach it, as the nodes do |
 | The cluster API answers one IP | If your address changes while the stack is up, Terraform can no longer reach the cluster to refresh it. `terraform apply -target=aws_eks_cluster.main` updates the allowlist first (it talks to AWS, not to the cluster); a plain apply or destroy works after it |
