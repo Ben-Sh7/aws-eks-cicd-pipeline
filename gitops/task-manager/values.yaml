@@ -149,7 +149,7 @@ redis:
 # app's own tables. Runs before the deployments on every sync, and is a no-op
 # once the role exists and its password is unchanged.
 dbBootstrap:
-  image: postgres:16-alpine
+  image: postgres:16.15-alpine3.24
   resources:
     requests:
       cpu: 50m
