@@ -268,6 +268,28 @@ resource "helm_release" "ingress_nginx" {
 
   values = [yamlencode({
     controller = {
+      replicaCount = 2
+
+      topologySpreadConstraints = [
+        for spread in [
+          { key = "kubernetes.io/hostname", when = "DoNotSchedule" },
+          { key = "topology.kubernetes.io/zone", when = "ScheduleAnyway" },
+          ] : {
+          maxSkew           = 1
+          topologyKey       = spread.key
+          whenUnsatisfiable = spread.when
+          nodeTaintsPolicy  = "Honor"
+          labelSelector = {
+            matchLabels = {
+              "app.kubernetes.io/name"      = "ingress-nginx"
+              "app.kubernetes.io/instance"  = "ingress-nginx"
+              "app.kubernetes.io/component" = "controller"
+            }
+          }
+          matchLabelKeys = ["pod-template-hash"]
+        }
+      ]
+
       service = {
         type = "LoadBalancer"
         annotations = {
