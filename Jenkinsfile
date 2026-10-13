@@ -14,8 +14,16 @@ spec:
       value: jenkins
       effect: NoSchedule
   containers:
+    - name: jnlp
+      image: jenkins/inbound-agent:3391.va_37fa_a_305d6d-5-jdk25
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
     - name: aws
-      image: amazon/aws-cli:2.37.1
+      image: amazon/aws-cli:2.37.10
       command: ["cat"]
       tty: true
       resources:
@@ -35,7 +43,7 @@ spec:
         limits:
           memory: 256Mi
     - name: promtool
-      image: prom/prometheus:v3.0.1
+      image: prom/prometheus:v3.15.0
       command: ["cat"]
       tty: true
       securityContext:
@@ -48,7 +56,7 @@ spec:
         limits:
           memory: 256Mi
     - name: trivy
-      image: aquasec/trivy:0.74.0
+      image: aquasec/trivy:0.75.0
       command: ["cat"]
       tty: true
       resources:
@@ -71,7 +79,7 @@ spec:
         limits:
           memory: 256Mi
     - name: buildkit
-      image: moby/buildkit:v0.33.0-rootless
+      image: moby/buildkit:v0.34.0-rootless
       args: ["--addr", "unix:///run/user/1000/buildkit/buildkitd.sock", "--oci-worker-no-process-sandbox"]
       securityContext:
         runAsUser: 1000

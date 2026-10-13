@@ -343,7 +343,7 @@ variable "trivy_operator_chart_version" {
 variable "jenkins_chart_version" {
   description = "Pinned Jenkins Helm chart version. Jenkins runs in the cluster, so a build is a pod that appears, works and disappears - there is no machine sitting idle between builds."
   type        = string
-  default     = "5.9.63"
+  default     = "5.9.68"
 }
 
 variable "jenkins_github_plugin_version" {
