@@ -57,6 +57,19 @@ spec:
           memory: 512Mi
         limits:
           memory: 1Gi
+    - name: crane
+      image: gcr.io/go-containerregistry/crane/debug:v0.22.1
+      command: ["cat"]
+      tty: true
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 256Mi
     - name: buildkit
       image: moby/buildkit:v0.33.0-rootless
       args: ["--addr", "unix:///run/user/1000/buildkit/buildkitd.sock", "--oci-worker-no-process-sandbox"]
@@ -219,22 +232,12 @@ spec:
         stage('Push to ECR') {
             when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
             steps {
-                echo "Pushing images to ECR with tag: ${env.VERSION}"
-                container('buildkit') {
+                echo "Pushing the files Trivy scanned to ECR with tag: ${env.VERSION} - a rebuild could differ from what was scanned"
+                container('crane') {
                     sh '''
                         export DOCKER_CONFIG=${WORKSPACE}/.docker
-
-                        buildctl build \
-                            --frontend dockerfile.v0 \
-                            --local context=app/backend \
-                            --local dockerfile=app/backend \
-                            --output type=image,name=${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION},push=true
-
-                        buildctl build \
-                            --frontend dockerfile.v0 \
-                            --local context=app/frontend \
-                            --local dockerfile=app/frontend \
-                            --output type=image,name=${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION},push=true
+                        crane push ${WORKSPACE}/backend.tar ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
+                        crane push ${WORKSPACE}/frontend.tar ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
                     '''
                 }
             }

@@ -251,7 +251,7 @@ Two things are silenced on purpose:
 
 **Both webhooks verify GitHub's HMAC signature.** Reaching the port isn't enough to trigger anything — so the firewall rules above are a second layer, not the only one.
 
-**Every disk is encrypted at rest.** The nodes' root disks through the launch template, the volumes Kubernetes creates (Prometheus, Grafana, Alertmanager, Loki, Jenkins) through the StorageClass, RDS by its own flag. Both are stated in the code rather than left to the account's default, which is off unless someone switched it on.
+**Every disk is encrypted at rest.** The nodes' root disks through the launch template, the volumes Kubernetes creates (Prometheus, Grafana, Alertmanager, Loki, Jenkins) through the StorageClass, RDS by its own flag. All three are stated in the code rather than left to the account's default, which is off unless someone switched it on.
 
 <details>
 <summary>Supply chain and runtime hardening</summary>
@@ -259,6 +259,8 @@ Two things are silenced on purpose:
 <br>
 
 **Trivy gates the build.** HIGH and CRITICAL CVEs fail it before anything reaches ECR.
+
+**What is pushed is the file Trivy scanned.** BuildKit writes each image to a file, Trivy scans the file, and `crane` uploads that same file. Building a second time for the push would resolve the base image's tag again and download the RDS certificate bundle again, so the pushed image could differ from the scanned one without anyone noticing.
 
 Trivy runs as a pinned image, like every other tool in the build pod, rather than a floating `latest` - so the scanner that passes a build today is the one that passed it last week.
 
