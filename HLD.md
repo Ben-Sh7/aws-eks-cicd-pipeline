@@ -238,7 +238,7 @@ Two things are silenced on purpose:
 | Jenkins | HTTPS through the ingress, limited to your IP + GitHub's webhook ranges. Nothing else |
 | Jenkins host access | **None.** There is no machine to log in to |
 | Grafana | ClusterIP. `port-forward` only |
-| ArgoCD | ClusterIP, with one path exposed: `/api/webhook`, `pathType: Exact` |
+| ArgoCD | ClusterIP, with one path exposed: `/api/webhook`, `pathType: Exact`, and only to GitHub's webhook ranges |
 
 **Identity**
 
