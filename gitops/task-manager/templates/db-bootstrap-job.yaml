@@ -17,6 +17,7 @@ spec:
         app: db-bootstrap
     spec:
       restartPolicy: OnFailure
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 70

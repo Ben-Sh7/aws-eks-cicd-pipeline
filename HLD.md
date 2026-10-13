@@ -246,6 +246,7 @@ Two things are silenced on purpose:
 | Jenkins builds | IRSA on the agent's service account: push to two ECR repositories, nothing else. No static keys |
 | External Secrets | IRSA, read-only, scoped to the exact secret ARNs it needs and no others |
 | RDS | Not public, encrypted, password created and rotated by AWS |
+| App pods | **No Kubernetes API token.** Every pod gets one by default; the app never calls the API, so `automountServiceAccountToken: false` leaves a compromised pod nothing to try against it |
 | App users | argon2id password hashes, rotating refresh tokens, `httpOnly` cookies |
 
 **Both webhooks verify GitHub's HMAC signature.** Reaching the port isn't enough to trigger anything — so the firewall rules above are a second layer, not the only one.
