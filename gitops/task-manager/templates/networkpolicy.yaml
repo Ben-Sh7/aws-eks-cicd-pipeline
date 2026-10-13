@@ -155,4 +155,37 @@ spec:
     - ports:
         - port: 443
           protocol: TCP
+    {{- if include "task-manager.redisEnabled" . }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: {{ .Values.redis.port }}
+          protocol: TCP
+    {{- end }}
+{{- if include "task-manager.redisEnabled" . }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis
+  labels:
+    app: redis
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - port: {{ .Values.redis.port }}
+          protocol: TCP
+{{- end }}
 {{- end }}

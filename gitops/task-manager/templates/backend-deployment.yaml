@@ -48,6 +48,14 @@ spec:
             name: app-config
         - secretRef:
             name: app-secret
+        {{- if include "task-manager.redisEnabled" . }}
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-auth
+              key: password
+        {{- end }}
         resources:
           {{- toYaml .Values.backend.resources | nindent 10 }}
         livenessProbe:

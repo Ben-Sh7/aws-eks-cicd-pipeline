@@ -10,6 +10,7 @@ import {
   Max,
   Min,
   MinLength,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -65,6 +66,22 @@ export class Env {
   @IsOptional()
   @IsString()
   GOOGLE_CLIENT_ID?: string;
+
+  // Where the rate-limit counts are kept, shared by every backend pod. Unset
+  // keeps them in this process's memory, which suits one instance or a test.
+  @IsOptional()
+  @IsString()
+  REDIS_HOST?: string;
+
+  @IsInt()
+  @Min(1)
+  @Max(65535)
+  REDIS_PORT: number = 6379;
+
+  @ValidateIf((env: Env) => Boolean(env.REDIS_HOST))
+  @IsString()
+  @IsNotEmpty()
+  REDIS_PASSWORD?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>): Env {

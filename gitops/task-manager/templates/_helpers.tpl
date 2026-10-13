@@ -8,6 +8,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
+Redis needs its password from Secrets Manager, so a local install keeps the
+rate-limit counts in the backend's memory instead.
+*/}}
+{{- define "task-manager.redisEnabled" -}}
+{{- if and .Values.redis.enabled (eq .Values.secrets.mode "externalSecrets") }}true{{ end }}
+{{- end -}}
+
+{{/*
 Spreads one app's pods: by node strictly, by zone where the scheduler can.
 Called with the app label, e.g. include "task-manager.topologySpread" "backend".
 */}}

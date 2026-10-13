@@ -102,7 +102,7 @@ spec:
         GITOPS_REPO_URL = 'github.com/Ben-Sh7/aws-eks-cicd-pipeline.git'
         APP_DIR = 'app/'
         CHART_DIR = 'gitops/task-manager'
-        CHART_STUB_VALUES = 'backend.image.repository=ci,backend.image.tag=ci,frontend.image.repository=ci,frontend.image.tag=ci,config.dbHost=ci,config.appUrl=https://ci.invalid,ingress.host=ci.invalid,secrets.awsSecretName=ci,secrets.jwtSecretName=ci,secrets.appDbSecretName=ci,secrets.dbMonitorSecretName=ci'
+        CHART_STUB_VALUES = 'backend.image.repository=ci,backend.image.tag=ci,frontend.image.repository=ci,frontend.image.tag=ci,config.dbHost=ci,config.appUrl=https://ci.invalid,ingress.host=ci.invalid,secrets.awsSecretName=ci,secrets.jwtSecretName=ci,secrets.appDbSecretName=ci,secrets.dbMonitorSecretName=ci,secrets.redisSecretName=ci'
         CI_BOT_NAME = 'jenkins-ci-bot'
         CI_BOT_EMAIL = 'jenkins-ci-bot@users.noreply.github.com'
         BUILDKIT_HOST = 'unix:///run/user/1000/buildkit/buildkitd.sock'

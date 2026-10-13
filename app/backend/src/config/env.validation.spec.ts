@@ -35,6 +35,23 @@ describe('validateEnv', () => {
     );
   });
 
+  it('keeps rate-limit counts in memory unless a Redis host is set', () => {
+    const env = validateEnv(validEnv);
+
+    expect(env.REDIS_HOST).toBeUndefined();
+    expect(env.REDIS_PORT).toBe(6379);
+  });
+
+  it('refuses a Redis host without a password', () => {
+    expect(() => validateEnv({ ...validEnv, REDIS_HOST: 'redis' })).toThrow(
+      /REDIS_PASSWORD/,
+    );
+    expect(
+      validateEnv({ ...validEnv, REDIS_HOST: 'redis', REDIS_PASSWORD: 'p' })
+        .REDIS_HOST,
+    ).toBe('redis');
+  });
+
   it('accepts a missing Google client id, which switches Google sign-in off', () => {
     const { GOOGLE_CLIENT_ID: _omitted, ...withoutClientId } = validEnv;
 

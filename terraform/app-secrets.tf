@@ -17,6 +17,25 @@ resource "aws_secretsmanager_secret_version" "jwt_secret" {
 }
 
 
+ephemeral "aws_secretsmanager_random_password" "redis_auth" {
+  password_length     = 40
+  exclude_punctuation = true
+}
+
+resource "aws_secretsmanager_secret" "redis_auth" {
+  name_prefix             = "${local.project_name}/redis-auth-"
+  description             = "Password Redis requires and the backend presents. Redis holds only rate-limit counts, but it answers no one without this."
+  recovery_window_in_days = 0
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "redis_auth" {
+  secret_id                = aws_secretsmanager_secret.redis_auth.id
+  secret_string_wo         = ephemeral.aws_secretsmanager_random_password.redis_auth.random_password
+  secret_string_wo_version = var.generated_secret_version
+}
+
+
 ephemeral "aws_secretsmanager_random_password" "app_db_user" {
   password_length     = 40
   exclude_punctuation = true
