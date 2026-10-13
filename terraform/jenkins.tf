@@ -183,7 +183,7 @@ locals {
         hostName         = local.jenkins_fqdn
 
         annotations = {
-          "nginx.ingress.kubernetes.io/whitelist-source-range" = join(",", concat(local.github_hook_cidrs, local.jenkins_ui_cidrs))
+          "nginx.ingress.kubernetes.io/whitelist-source-range" = join(",", concat(local.github_hook_cidrs, local.operator_cidrs))
         }
       }
 

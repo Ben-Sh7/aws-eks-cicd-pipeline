@@ -97,11 +97,11 @@ resource "aws_security_group" "eks" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "Allow HTTPS from anywhere"
+    description = "Kubernetes API from inside the VPC"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.vpc_cidr]
   }
 
   egress {
@@ -140,7 +140,7 @@ locals {
 }
 
 data "http" "my_ip" {
-  count = length(var.jenkins_ui_allowed_cidrs) == 0 ? 1 : 0
+  count = length(var.operator_cidrs) == 0 ? 1 : 0
 
   url                = "https://checkip.amazonaws.com"
   request_timeout_ms = 10000
@@ -152,7 +152,7 @@ data "http" "my_ip" {
 }
 
 locals {
-  jenkins_ui_cidrs = length(var.jenkins_ui_allowed_cidrs) > 0 ? var.jenkins_ui_allowed_cidrs : ["${trimspace(data.http.my_ip[0].response_body)}/32"]
+  operator_cidrs = length(var.operator_cidrs) > 0 ? var.operator_cidrs : ["${trimspace(data.http.my_ip[0].response_body)}/32"]
 }
 
 resource "aws_iam_role" "eks_cluster_role" {
@@ -230,6 +230,7 @@ resource "aws_eks_cluster" "main" {
     security_group_ids      = [aws_security_group.eks.id]
     endpoint_private_access = true
     endpoint_public_access  = true
+    public_access_cidrs     = local.operator_cidrs
   }
 
   depends_on = [

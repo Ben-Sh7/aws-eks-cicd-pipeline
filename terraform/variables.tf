@@ -232,8 +232,8 @@ variable "monthly_budget_usd" {
   default     = 50
 }
 
-variable "jenkins_ui_allowed_cidrs" {
-  description = "CIDRs allowed to reach Jenkins through the ingress. Left empty, Terraform allows exactly the public IP it is running from (looked up at plan time, see data.http.my_ip in main.tf) - never 0.0.0.0/0. GitHub's webhook ranges are allowed separately and do not belong here."
+variable "operator_cidrs" {
+  description = "CIDRs allowed to reach the cluster's public API endpoint and the Jenkins UI. Left empty, Terraform allows exactly the public IP it is running from (looked up at plan time, see data.http.my_ip in main.tf) - never 0.0.0.0/0. GitHub's webhook ranges are allowed separately and do not belong here. The nodes, ArgoCD and everything else inside the cluster use the private endpoint, so this list is only for people."
   type        = list(string)
   default     = []
 }

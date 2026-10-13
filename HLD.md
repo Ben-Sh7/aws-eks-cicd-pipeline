@@ -234,6 +234,7 @@ Two things are silenced on purpose:
 |---|---|
 | Nodes, both groups | Private subnets, no public IP. Egress via NAT, except in-region S3 (gateway endpoint) |
 | App | HTTPS only - the load balancer terminates TLS and accepts TLS 1.2 only, and nginx redirects port 80. The backend is `ClusterIP` only |
+| Cluster API | The public endpoint answers your IP only - the one Terraform runs from, the same lookup as Jenkins. Nodes, ArgoCD and every other in-cluster client use the private endpoint, so nothing else needs the public one. Inside the VPC, its security group accepts 443 from the VPC's own range, not from anywhere |
 | Jenkins | HTTPS through the ingress, limited to your IP + GitHub's webhook ranges. Nothing else |
 | Jenkins host access | **None.** There is no machine to log in to |
 | Grafana | ClusterIP. `port-forward` only |
@@ -355,6 +356,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
 | CI lives in the cluster it deploys to | A broken cluster is a broken CI, and a push while the stack is down is neither built nor scanned until the next apply. The trade for elastic build capacity and one way of running everything |
 | Build history dies with the environment | JENKINS_HOME is a volume the destroy takes. The configuration is code, so a rebuild returns an identical Jenkins - with an empty history |
+| The cluster API answers one IP | If your address changes while the stack is up, Terraform can no longer reach the cluster to refresh it. `terraform apply -target=aws_eks_cluster.main` updates the allowlist first (it talks to AWS, not to the cluster); a plain apply or destroy works after it |
 | ECR repository names are fixed strings, not derived from `project_name` | The Jenkinsfile names the same repositories, and nothing passes the Terraform value to it. Renaming the project means editing both |
 
 ---
