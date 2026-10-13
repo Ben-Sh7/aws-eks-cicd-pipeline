@@ -1,9 +1,9 @@
 backend:
   image:
     repository: 619648596437.dkr.ecr.us-east-1.amazonaws.com/devops-task-manager-backend
-    tag: "4bacd7c"
+    tag: "bd7b564"
 
 frontend:
   image:
     repository: 619648596437.dkr.ecr.us-east-1.amazonaws.com/devops-task-manager-frontend
-    tag: "4bacd7c"
+    tag: "bd7b564"
