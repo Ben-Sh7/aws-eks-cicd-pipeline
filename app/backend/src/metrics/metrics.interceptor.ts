@@ -22,7 +22,8 @@ export class MetricsInterceptor implements NestInterceptor {
         method: request.method,
         // The declared path, not the URL: /tasks/:id stays one series
         // instead of one per task id.
-        route: request.route?.path ?? 'unmatched',
+        route:
+          (request.route as { path?: string } | undefined)?.path ?? 'unmatched',
         status: String(status),
       });
     };
