@@ -27,7 +27,7 @@ Two node groups, all of it in private subnets with no public IP:
 | **App nodes**, 2–4 | The app, the monitoring, the cluster's own add-ons |
 | **Jenkins nodes**, 1–3 | Tainted, so only CI lands there. One is always up for the controller; the autoscaler adds more only when builds queue |
 
-The nodes need internet access to pull images. That goes out through one NAT gateway. ECR image layers skip it: they come from S3, through a free S3 gateway endpoint.
+The nodes need internet access to pull images. That goes out through a NAT gateway in their own availability zone - one per zone, each private subnet with a route table of its own - so a zone going down does not cut the other zone's way out. ECR image layers skip the NAT: they come from S3, through a free S3 gateway endpoint.
 
 ![Inside the cluster: browser to ingress to frontend to backend to database, every hop a ClusterIP Service](docs/inside-the-cluster.png)
 
@@ -302,7 +302,7 @@ What is arranged:
 
 | | |
 |---|---|
-| The node group **depends on the NAT route** and on the private subnets' route-table links; the NAT, on its own subnet's link | Nothing else references them, so without this Terraform deletes them in the first second of a destroy, and everything still running on the nodes loses its way to the AWS API |
+| Both node groups **depend on both NAT routes** and on the private subnets' route-table links; each NAT, on its own subnet's link | Nothing else references them, so without this Terraform deletes them in the first second of a destroy, and everything still running on the nodes loses its way to the AWS API |
 | The ArgoCD `Application` carries **no finalizer** | Helm deletes the Application and the ArgoCD controller in the same uninstall. A finalizer would wait for a controller that is already going, and hang until the timeout. Nothing is lost by dropping it: the app owns only ClusterIP Services, Deployments and an Ingress - no cloud resources |
 | The `monitoring` and `jenkins` namespaces are **Terraform resources**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the volumes of Prometheus, Grafana, Alertmanager, Loki and Jenkins live in them. Deleting the namespace deletes the claims |
 | Between that namespace and the EBS CSI driver, the destroy **waits until the volumes are gone** | A PersistentVolume is cluster-scoped and outlives its namespace, and the CSI driver removes the volume asynchronously afterwards. The destroy waits for each of the cluster's volumes to be deleted, up to 10 minutes; if one is not, it stops there - with the driver still running - instead of leaving it behind |
@@ -350,7 +350,6 @@ Decisions that are not obvious from reading the code, and that something depends
 | Two webhook signing secrets are in Terraform state | Unavoidable: Terraform hands the same value to GitHub and to the receiver, and an ephemeral value cannot reach an ordinary resource argument. Everything else it generates is written with a write-only argument and never recorded — see [State](#state) |
 | The domain must already be a delegated Route53 zone | Terraform looks the zone up rather than creating it; a zone created in the same apply would not be delegated, and certificate validation would wait on DNS nobody can answer |
 | RDS is single-AZ | `multi_az = true` when uptime beats cost |
-| One NAT gateway, not one per AZ | ~$32/month instead of ~$64. An AZ outage takes egress for both |
 | The sign-in limit is counted per backend pod | The throttler keeps its counts in each pod's memory, so 20 attempts a minute is 20 per pod that receives traffic: 30 to 40 got through in tests with three pods, and up to 200 could at ten. A shared store such as Redis would make it one count |
 | S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |

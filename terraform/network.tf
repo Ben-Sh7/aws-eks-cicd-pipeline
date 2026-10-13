@@ -105,23 +105,32 @@ resource "aws_subnet" "private_2" {
   )
 }
 
-resource "aws_route_table" "private" {
+resource "aws_route_table" "private_1" {
   vpc_id = aws_vpc.main.id
 
   tags = merge(
     local.common_tags,
-    { Name = "${local.project_name}-private-rt" }
+    { Name = "${local.project_name}-private-1-rt" }
+  )
+}
+
+resource "aws_route_table" "private_2" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(
+    local.common_tags,
+    { Name = "${local.project_name}-private-2-rt" }
   )
 }
 
 resource "aws_route_table_association" "private_1" {
   subnet_id      = aws_subnet.private_1.id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private_1.id
 }
 
 resource "aws_route_table_association" "private_2" {
   subnet_id      = aws_subnet.private_2.id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private_2.id
 }
 
 resource "aws_subnet" "db_1" {
@@ -165,24 +174,35 @@ resource "aws_route_table_association" "db_2" {
   route_table_id = aws_route_table.db.id
 }
 
-resource "aws_eip" "nat" {
+resource "aws_eip" "nat_1" {
   domain = "vpc"
 
   tags = merge(
     local.common_tags,
-    { Name = "${local.project_name}-nat-eip" }
+    { Name = "${local.project_name}-nat-1-eip" }
   )
 
   depends_on = [aws_internet_gateway.main]
 }
 
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
+resource "aws_eip" "nat_2" {
+  domain = "vpc"
+
+  tags = merge(
+    local.common_tags,
+    { Name = "${local.project_name}-nat-2-eip" }
+  )
+
+  depends_on = [aws_internet_gateway.main]
+}
+
+resource "aws_nat_gateway" "public_1" {
+  allocation_id = aws_eip.nat_1.id
   subnet_id     = aws_subnet.public_1.id
 
   tags = merge(
     local.common_tags,
-    { Name = "${local.project_name}-nat" }
+    { Name = "${local.project_name}-nat-1" }
   )
 
   depends_on = [
@@ -191,17 +211,38 @@ resource "aws_nat_gateway" "main" {
   ]
 }
 
-resource "aws_route" "private_nat" {
-  route_table_id         = aws_route_table.private.id
+resource "aws_nat_gateway" "public_2" {
+  allocation_id = aws_eip.nat_2.id
+  subnet_id     = aws_subnet.public_2.id
+
+  tags = merge(
+    local.common_tags,
+    { Name = "${local.project_name}-nat-2" }
+  )
+
+  depends_on = [
+    aws_internet_gateway.main,
+    aws_route_table_association.public_2,
+  ]
+}
+
+resource "aws_route" "private_1_nat" {
+  route_table_id         = aws_route_table.private_1.id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.main.id
+  nat_gateway_id         = aws_nat_gateway.public_1.id
+}
+
+resource "aws_route" "private_2_nat" {
+  route_table_id         = aws_route_table.private_2.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.public_2.id
 }
 
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${var.aws_region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.private.id]
+  route_table_ids   = [aws_route_table.private_1.id, aws_route_table.private_2.id]
 
   tags = merge(
     local.common_tags,
