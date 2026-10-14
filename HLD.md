@@ -50,7 +50,7 @@ Browser → ingress → frontend → backend → database. Nothing skips a step.
 
 Which subnet each thing sits in, which route table sends its traffic where, and what a pod's address actually is:
 
-![Network and storage: the VPC and its four subnets, both route tables, the NAT gateway and internet gateway, the pod network, the NetworkPolicy, the volumes, and the security groups](docs/platform-network.png)
+![Network and storage: the VPC and its six subnets, its four route tables, a NAT gateway per zone and the internet gateway, the pod network, the NetworkPolicy, the volumes, and the security groups](docs/platform-network.png)
 
 ---
 
