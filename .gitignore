@@ -23,6 +23,7 @@ gitops/task-manager/values-secret.yaml
 # Terraform artifacts. Plan files contain everything a state file does.
 # The provider lock files are safe to commit and are not excluded.
 .terraform/
+.helm/
 *.tfstate
 *.tfstate.*
 *.tfplan

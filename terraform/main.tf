@@ -64,6 +64,9 @@ provider "kubernetes" {
 }
 
 provider "helm" {
+  repository_config_path = "${path.module}/.helm/repositories.yaml"
+  repository_cache       = "${path.module}/.helm/cache"
+
   kubernetes {
     host                   = aws_eks_cluster.main.endpoint
     cluster_ca_certificate = base64decode(aws_eks_cluster.main.certificate_authority[0].data)
@@ -97,11 +100,11 @@ resource "aws_security_group" "eks" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "Allow HTTPS from anywhere"
+    description = "Kubernetes API from inside the VPC"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.vpc_cidr]
   }
 
   egress {
@@ -140,7 +143,7 @@ locals {
 }
 
 data "http" "my_ip" {
-  count = length(var.jenkins_ui_allowed_cidrs) == 0 ? 1 : 0
+  count = length(var.operator_cidrs) == 0 ? 1 : 0
 
   url                = "https://checkip.amazonaws.com"
   request_timeout_ms = 10000
@@ -152,7 +155,7 @@ data "http" "my_ip" {
 }
 
 locals {
-  jenkins_ui_cidrs = length(var.jenkins_ui_allowed_cidrs) > 0 ? var.jenkins_ui_allowed_cidrs : ["${trimspace(data.http.my_ip[0].response_body)}/32"]
+  operator_cidrs = length(var.operator_cidrs) > 0 ? var.operator_cidrs : ["${trimspace(data.http.my_ip[0].response_body)}/32"]
 }
 
 resource "aws_iam_role" "eks_cluster_role" {
@@ -230,6 +233,7 @@ resource "aws_eks_cluster" "main" {
     security_group_ids      = [aws_security_group.eks.id]
     endpoint_private_access = true
     endpoint_public_access  = true
+    public_access_cidrs     = local.operator_cidrs
   }
 
   depends_on = [
@@ -263,6 +267,17 @@ resource "aws_launch_template" "eks_nodes" {
     --//--
   EOT
   )
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+
+    ebs {
+      volume_size           = var.node_disk_size
+      volume_type           = "gp3"
+      encrypted             = true
+      delete_on_termination = true
+    }
+  }
 
   tag_specifications {
     resource_type = "instance"
@@ -320,7 +335,8 @@ resource "aws_eks_node_group" "main" {
     aws_iam_role_policy_attachment.eks_node_policy,
     aws_iam_role_policy_attachment.eks_cni_policy,
     aws_iam_role_policy_attachment.eks_registry_policy,
-    aws_route.private_nat,
+    aws_route.private_1_nat,
+    aws_route.private_2_nat,
     aws_route_table_association.private_1,
     aws_route_table_association.private_2,
   ]

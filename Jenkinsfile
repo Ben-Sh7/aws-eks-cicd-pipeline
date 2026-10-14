@@ -14,8 +14,16 @@ spec:
       value: jenkins
       effect: NoSchedule
   containers:
+    - name: jnlp
+      image: jenkins/inbound-agent:3391.va_37fa_a_305d6d-5-jdk25
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
     - name: aws
-      image: amazon/aws-cli:2.37.1
+      image: amazon/aws-cli:2.37.10
       command: ["cat"]
       tty: true
       resources:
@@ -35,7 +43,7 @@ spec:
         limits:
           memory: 256Mi
     - name: promtool
-      image: prom/prometheus:v3.0.1
+      image: prom/prometheus:v3.15.0
       command: ["cat"]
       tty: true
       securityContext:
@@ -48,7 +56,7 @@ spec:
         limits:
           memory: 256Mi
     - name: trivy
-      image: aquasec/trivy:0.74.0
+      image: aquasec/trivy:0.75.0
       command: ["cat"]
       tty: true
       resources:
@@ -57,8 +65,21 @@ spec:
           memory: 512Mi
         limits:
           memory: 1Gi
+    - name: crane
+      image: gcr.io/go-containerregistry/crane/debug:v0.22.1
+      command: ["cat"]
+      tty: true
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 256Mi
     - name: buildkit
-      image: moby/buildkit:v0.33.0-rootless
+      image: moby/buildkit:v0.34.0-rootless
       args: ["--addr", "unix:///run/user/1000/buildkit/buildkitd.sock", "--oci-worker-no-process-sandbox"]
       securityContext:
         runAsUser: 1000
@@ -89,7 +110,7 @@ spec:
         GITOPS_REPO_URL = 'github.com/Ben-Sh7/aws-eks-cicd-pipeline.git'
         APP_DIR = 'app/'
         CHART_DIR = 'gitops/task-manager'
-        CHART_STUB_VALUES = 'backend.image.repository=ci,backend.image.tag=ci,frontend.image.repository=ci,frontend.image.tag=ci,config.dbHost=ci,config.appUrl=https://ci.invalid,ingress.host=ci.invalid,secrets.awsSecretName=ci,secrets.jwtSecretName=ci,secrets.appDbSecretName=ci,secrets.dbMonitorSecretName=ci'
+        CHART_STUB_VALUES = 'backend.image.repository=ci,backend.image.tag=ci,frontend.image.repository=ci,frontend.image.tag=ci,config.dbHost=ci,config.appUrl=https://ci.invalid,ingress.host=ci.invalid,secrets.awsSecretName=ci,secrets.jwtSecretName=ci,secrets.appDbSecretName=ci,secrets.dbMonitorSecretName=ci,secrets.redisSecretName=ci'
         CI_BOT_NAME = 'jenkins-ci-bot'
         CI_BOT_EMAIL = 'jenkins-ci-bot@users.noreply.github.com'
         BUILDKIT_HOST = 'unix:///run/user/1000/buildkit/buildkitd.sock'
@@ -219,22 +240,12 @@ spec:
         stage('Push to ECR') {
             when { expression { env.SKIP_BUILD != 'true' && env.IMAGE_EXISTS != 'true' } }
             steps {
-                echo "Pushing images to ECR with tag: ${env.VERSION}"
-                container('buildkit') {
+                echo "Pushing the files Trivy scanned to ECR with tag: ${env.VERSION} - a rebuild could differ from what was scanned"
+                container('crane') {
                     sh '''
                         export DOCKER_CONFIG=${WORKSPACE}/.docker
-
-                        buildctl build \
-                            --frontend dockerfile.v0 \
-                            --local context=app/backend \
-                            --local dockerfile=app/backend \
-                            --output type=image,name=${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION},push=true
-
-                        buildctl build \
-                            --frontend dockerfile.v0 \
-                            --local context=app/frontend \
-                            --local dockerfile=app/frontend \
-                            --output type=image,name=${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION},push=true
+                        crane push ${WORKSPACE}/backend.tar ${ECR_REGISTRY}/${BACKEND_REPO}:${VERSION}
+                        crane push ${WORKSPACE}/frontend.tar ${ECR_REGISTRY}/${FRONTEND_REPO}:${VERSION}
                     '''
                 }
             }

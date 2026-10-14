@@ -24,7 +24,8 @@ resource "kubernetes_ingress_v1" "argocd_webhook" {
     name      = "argocd-webhook"
     namespace = "argocd"
     annotations = {
-      "nginx.ingress.kubernetes.io/backend-protocol" = "HTTPS"
+      "nginx.ingress.kubernetes.io/backend-protocol"       = "HTTPS"
+      "nginx.ingress.kubernetes.io/whitelist-source-range" = join(",", local.github_hook_cidrs)
     }
     labels = {
       "app.kubernetes.io/part-of"    = "argocd"

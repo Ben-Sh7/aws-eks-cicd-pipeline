@@ -183,7 +183,7 @@ locals {
         hostName         = local.jenkins_fqdn
 
         annotations = {
-          "nginx.ingress.kubernetes.io/whitelist-source-range" = join(",", concat(local.github_hook_cidrs, local.jenkins_ui_cidrs))
+          "nginx.ingress.kubernetes.io/whitelist-source-range" = join(",", concat(local.github_hook_cidrs, local.operator_cidrs))
         }
       }
 
@@ -275,7 +275,8 @@ resource "aws_eks_node_group" "jenkins" {
     aws_iam_role_policy_attachment.eks_node_policy,
     aws_iam_role_policy_attachment.eks_cni_policy,
     aws_iam_role_policy_attachment.eks_registry_policy,
-    aws_route.private_nat,
+    aws_route.private_1_nat,
+    aws_route.private_2_nat,
     aws_route_table_association.private_1,
     aws_route_table_association.private_2,
   ]

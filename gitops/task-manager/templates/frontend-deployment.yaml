@@ -19,6 +19,9 @@ spec:
       labels:
         app: frontend
     spec:
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        {{- include "task-manager.topologySpread" "frontend" | nindent 8 }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

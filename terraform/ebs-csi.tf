@@ -56,6 +56,7 @@ resource "kubernetes_storage_class" "gp3_tagged" {
 
   parameters = {
     type               = "gp3"
+    encrypted          = "true"
     tagSpecification_1 = "Project=${local.common_tags.Project}"
     tagSpecification_2 = "Environment=${local.common_tags.Environment}"
     tagSpecification_3 = "ManagedBy=${local.common_tags.ManagedBy}"

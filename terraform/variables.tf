@@ -35,15 +35,27 @@ variable "public_subnet_2_cidr" {
 }
 
 variable "private_subnet_1_cidr" {
-  description = "Private subnet 1 CIDR block (RDS)"
+  description = "Private subnet 1 CIDR block - the nodes, and the pods, which take their addresses from the node's subnet"
   type        = string
   default     = "10.0.11.0/24"
 }
 
 variable "private_subnet_2_cidr" {
-  description = "Private subnet 2 CIDR block (RDS)"
+  description = "Private subnet 2 CIDR block - the nodes, and the pods, which take their addresses from the node's subnet"
   type        = string
   default     = "10.0.12.0/24"
+}
+
+variable "db_subnet_1_cidr" {
+  description = "Database subnet 1 CIDR block. Nothing but RDS lives here, so a NetworkPolicy can keep a pod off the database by this range alone, without knowing the database's address."
+  type        = string
+  default     = "10.0.21.0/24"
+}
+
+variable "db_subnet_2_cidr" {
+  description = "Database subnet 2 CIDR block. RDS requires a subnet group spanning two availability zones even for a single-AZ instance."
+  type        = string
+  default     = "10.0.22.0/24"
 }
 
 variable "rds_engine_version" {
@@ -122,6 +134,12 @@ variable "node_max_pods" {
   description = "Pods a node may run. The IP-per-pod default is 17 on t3.medium, which the add-ons alone nearly fill; prefix delegation lifts the address limit and this lifts kubelet's. Kept well under what the addresses now allow, because 4 GiB of memory runs out before the addresses do."
   type        = number
   default     = 50
+}
+
+variable "node_disk_size" {
+  description = "Root disk of every node, in GiB. Holds the OS and the images the node has pulled. Declaring the disk in the launch template is what lets it be encrypted; the account's own default leaves volumes unencrypted."
+  type        = number
+  default     = 20
 }
 
 variable "ingress_nginx_chart_version" {
@@ -226,8 +244,8 @@ variable "monthly_budget_usd" {
   default     = 50
 }
 
-variable "jenkins_ui_allowed_cidrs" {
-  description = "CIDRs allowed to reach Jenkins through the ingress. Left empty, Terraform allows exactly the public IP it is running from (looked up at plan time, see data.http.my_ip in main.tf) - never 0.0.0.0/0. GitHub's webhook ranges are allowed separately and do not belong here."
+variable "operator_cidrs" {
+  description = "CIDRs allowed to reach the cluster's public API endpoint and the Jenkins UI. Left empty, Terraform allows exactly the public IP it is running from (looked up at plan time, see data.http.my_ip in main.tf) - never 0.0.0.0/0. GitHub's webhook ranges are allowed separately and do not belong here. The nodes, ArgoCD and everything else inside the cluster use the private endpoint, so this list is only for people."
   type        = list(string)
   default     = []
 }
@@ -325,7 +343,7 @@ variable "trivy_operator_chart_version" {
 variable "jenkins_chart_version" {
   description = "Pinned Jenkins Helm chart version. Jenkins runs in the cluster, so a build is a pod that appears, works and disappears - there is no machine sitting idle between builds."
   type        = string
-  default     = "5.9.63"
+  default     = "5.9.68"
 }
 
 variable "jenkins_github_plugin_version" {

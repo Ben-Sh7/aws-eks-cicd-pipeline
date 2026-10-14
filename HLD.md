@@ -27,7 +27,7 @@ Two node groups, all of it in private subnets with no public IP:
 | **App nodes**, 2–4 | The app, the monitoring, the cluster's own add-ons |
 | **Jenkins nodes**, 1–3 | Tainted, so only CI lands there. One is always up for the controller; the autoscaler adds more only when builds queue |
 
-The nodes need internet access to pull images. That goes out through one NAT gateway. ECR image layers skip it: they come from S3, through a free S3 gateway endpoint.
+The nodes need internet access to pull images. That goes out through a NAT gateway in their own availability zone - one per zone, each private subnet with a route table of its own - so a zone going down does not cut the other zone's way out. ECR image layers skip the NAT: they come from S3, through a free S3 gateway endpoint.
 
 ![Inside the cluster: browser to ingress to frontend to backend to database, every hop a ClusterIP Service](docs/inside-the-cluster.png)
 
@@ -40,14 +40,17 @@ Browser → ingress → frontend → backend → database. Nothing skips a step.
 - The ingress routes to the frontend only. The backend API is never exposed — the frontend forwards a fixed list of routes to it
 - No node has a public IP, so a bad firewall rule can't expose one
 - RDS accepts port 5432 from the nodes' security group only — not a CIDR, not the internet
+- Of the pods on those nodes, three may open it: the backend, the job that creates its database role, and the metrics exporter. RDS sits in two subnets of its own, so a NetworkPolicy can name it by address range: every other namespace carries `keep-off-the-database`, which allows any destination except those two ranges
 
 **Replicas** are the autoscaler's to decide: backend 3-10, frontend 2-6, on CPU and memory. The chart leaves `replicas` out of both Deployments when autoscaling is on, so nothing fights the HPA over the number.
+
+**Where they land** is not left to the scheduler's defaults, which only prefer spreading. No node may hold two more of an app's pods than another node does, and the pods lean towards both zones; the ingress controller runs two replicas under the same rules. A PodDisruptionBudget on each lets a node drain - an upgrade, or the autoscaler removing it - take one pod of an app at a time.
 
 ### The network under it
 
 Which subnet each thing sits in, which route table sends its traffic where, and what a pod's address actually is:
 
-![Network and storage: the VPC and its four subnets, both route tables, the NAT gateway and internet gateway, the pod network, the NetworkPolicy, the volumes, and the security groups](docs/platform-network.png)
+![Network and storage: the VPC and its six subnets, its four route tables, a NAT gateway per zone and the internet gateway, the pod network, the NetworkPolicy, the volumes, and the security groups](docs/platform-network.png)
 
 ---
 
@@ -58,6 +61,7 @@ Which subnet each thing sits in, which route table sends its traffic where, and 
 | **Frontend** | Next.js | Pages, plus a thin server layer (a *BFF*) that holds the session cookies and forwards API calls |
 | **Backend** | NestJS | The API: accounts, sessions, tasks. Every route requires a valid access token unless marked public |
 | **Database** | PostgreSQL | Schema managed by migrations the backend runs on startup |
+| **Rate limits** | Redis | Holds the sign-in and request counts, so every backend pod enforces one limit instead of a limit each. No disk: the counts live a minute, and while Redis is away each pod counts in its own memory rather than refusing sign-ins |
 
 ### Sessions
 
@@ -104,7 +108,7 @@ That credential belongs to a Google project, not to this infrastructure, so Terr
 
 **CD** — webhook → merge the values files → sync the chart → Kubernetes rolls out
 
-**Secrets** — External Secrets Operator reads Secrets Manager over IRSA and writes what each namespace needs: the RDS password that AWS rotates itself, the JWT signing key, the app's own database role, the Google sign-in client, the read-only role the database exporter uses, Grafana's and Jenkins' logins, the webhook secret, the GitHub token and the Slack webhook URL. None of them enters Terraform state or Git.
+**Secrets** — External Secrets Operator reads Secrets Manager over IRSA and writes what each namespace needs: the RDS password that AWS rotates itself, the JWT signing key, the Redis password, the app's own database role, the Google sign-in client, the read-only role the database exporter uses, Grafana's and Jenkins' logins, the webhook secret, the GitHub token and the Slack webhook URL. None of them enters Terraform state or Git.
 
 <details>
 <summary>Why ArgoCD ignores most commits — and reverts changes you never committed</summary>
@@ -234,10 +238,12 @@ Two things are silenced on purpose:
 |---|---|
 | Nodes, both groups | Private subnets, no public IP. Egress via NAT, except in-region S3 (gateway endpoint) |
 | App | HTTPS only - the load balancer terminates TLS and accepts TLS 1.2 only, and nginx redirects port 80. The backend is `ClusterIP` only |
+| Cluster API | The public endpoint answers your IP only - the one Terraform runs from, the same lookup as Jenkins. Nodes, ArgoCD and every other in-cluster client use the private endpoint, so nothing else needs the public one. Inside the VPC, its security group accepts 443 from the VPC's own range, not from anywhere |
 | Jenkins | HTTPS through the ingress, limited to your IP + GitHub's webhook ranges. Nothing else |
 | Jenkins host access | **None.** There is no machine to log in to |
 | Grafana | ClusterIP. `port-forward` only |
-| ArgoCD | ClusterIP, with one path exposed: `/api/webhook`, `pathType: Exact` |
+| Redis | ClusterIP, and a NetworkPolicy admits the backend alone. It also requires a password, generated by Terraform and delivered by External Secrets |
+| ArgoCD | ClusterIP, with one path exposed: `/api/webhook`, `pathType: Exact`, and only to GitHub's webhook ranges |
 
 **Identity**
 
@@ -246,9 +252,12 @@ Two things are silenced on purpose:
 | Jenkins builds | IRSA on the agent's service account: push to two ECR repositories, nothing else. No static keys |
 | External Secrets | IRSA, read-only, scoped to the exact secret ARNs it needs and no others |
 | RDS | Not public, encrypted, password created and rotated by AWS |
+| App pods | **No Kubernetes API token.** Every pod gets one by default; the app never calls the API, so `automountServiceAccountToken: false` leaves a compromised pod nothing to try against it |
 | App users | argon2id password hashes, rotating refresh tokens, `httpOnly` cookies |
 
 **Both webhooks verify GitHub's HMAC signature.** Reaching the port isn't enough to trigger anything — so the firewall rules above are a second layer, not the only one.
+
+**Every disk is encrypted at rest.** The nodes' root disks through the launch template, the volumes Kubernetes creates (Prometheus, Grafana, Alertmanager, Loki, Jenkins) through the StorageClass, RDS by its own flag. All three are stated in the code rather than left to the account's default, which is off unless someone switched it on.
 
 <details>
 <summary>Supply chain and runtime hardening</summary>
@@ -257,7 +266,9 @@ Two things are silenced on purpose:
 
 **Trivy gates the build.** HIGH and CRITICAL CVEs fail it before anything reaches ECR.
 
-Trivy runs as a pinned image, like every other tool in the build pod, rather than a floating `latest` - so the scanner that passes a build today is the one that passed it last week.
+**What is pushed is the file Trivy scanned.** BuildKit writes each image to a file, Trivy scans the file, and `crane` uploads that same file. Building a second time for the push would resolve the base image's tag again and download the RDS certificate bundle again, so the pushed image could differ from the scanned one without anyone noticing.
+
+Trivy runs as a pinned image, like every other tool in the build pod, rather than a floating `latest` - so the scanner that passes a build today is the one that passed it last week. That includes the `jnlp` agent container, which the Kubernetes plugin would otherwise pick by itself and change with every plugin update.
 
 **Runtime images** run a current Node LTS with `npm` removed from the final stage. npm's bundled dependencies were the last HIGH findings standing between the image and a clean scan. The compiled code is owned by root, so the process cannot modify it.
 
@@ -295,7 +306,7 @@ What is arranged:
 
 | | |
 |---|---|
-| The node group **depends on the NAT route** and on the private subnets' route-table links; the NAT, on its own subnet's link | Nothing else references them, so without this Terraform deletes them in the first second of a destroy, and everything still running on the nodes loses its way to the AWS API |
+| Both node groups **depend on both NAT routes** and on the private subnets' route-table links; each NAT, on its own subnet's link | Nothing else references them, so without this Terraform deletes them in the first second of a destroy, and everything still running on the nodes loses its way to the AWS API |
 | The ArgoCD `Application` carries **no finalizer** | Helm deletes the Application and the ArgoCD controller in the same uninstall. A finalizer would wait for a controller that is already going, and hang until the timeout. Nothing is lost by dropping it: the app owns only ClusterIP Services, Deployments and an Ingress - no cloud resources |
 | The `monitoring` and `jenkins` namespaces are **Terraform resources**, not `create_namespace` | A Helm uninstall does not delete a namespace, and the volumes of Prometheus, Grafana, Alertmanager, Loki and Jenkins live in them. Deleting the namespace deletes the claims |
 | Between that namespace and the EBS CSI driver, the destroy **waits until the volumes are gone** | A PersistentVolume is cluster-scoped and outlives its namespace, and the CSI driver removes the volume asynchronously afterwards. The destroy waits for each of the cluster's volumes to be deleted, up to 10 minutes; if one is not, it stops there - with the driver still running - instead of leaving it behind |
@@ -326,9 +337,11 @@ Decisions that are not obvious from reading the code, and that something depends
 | ingress-nginx config: `use-forwarded-headers` | With TLS terminated upstream, `X-Forwarded-Proto` is the only way nginx can tell HTTP from HTTPS - and the only way a redirect-to-HTTPS rule avoids looping |
 | ingress-nginx config: `proxy-real-ip-cidr` = the VPC's range | `use-forwarded-headers` also makes nginx take the caller's address from `X-Forwarded-For`, and by default it trusts every address in that header - so the entry the caller wrote wins over the one the load balancer appended. Trusting only the VPC, where the load balancer lives, makes nginx stop at the load balancer's entry. Without it, one forged header got past the Jenkins allowlist and reset the sign-in limit on every attempt; both were tested live, before and after |
 | The Prometheus Operator CRDs are a release of their own, installed first | ingress-nginx and External Secrets ship ServiceMonitors, and they install before kube-prometheus-stack - which needs External Secrets for its own secrets. Letting the stack install the CRDs is a cycle; a separate CRD release breaks it. The stack runs with `crds.enabled = false` |
+| The Helm provider has a repository list and cache of its own, in `terraform/.helm/` | To fetch a chart, Helm reads every repository in its list and stops if any of them has no cached index. With the operator's own list, an apply depended on when that machine last ran `helm repo update`: on 2026-10-13 Windows had emptied its temp folder, the cached indexes with it, and the apply stopped at the first release. The provider's own list is empty, so each chart is fetched straight from its URL |
 | The Helm releases are chained with `depends_on` | The provider shares one repository cache across resources; installing them in parallel makes all but one fail with "no cached repo found" on a cold cache. external-secrets also has to precede monitoring, whose release ships an ExternalSecret |
 | The ArgoCD Application comes from the `argocd-apps` chart, in a release ordered after argo-cd | A chart cannot create a custom resource whose CRD it installs in that same release: Helm validates the whole manifest against the cluster before installing anything, so the kind does not exist yet. A `kubernetes_manifest` does not work either - it is evaluated at plan time, before the cluster exists |
 | The app runs in a `task-manager` namespace of its own, labelled Pod Security `restricted`, which ArgoCD creates | `default` is where anything lands that names no namespace, so the app would share it with every such mistake (CIS Kubernetes Benchmark 5.7.4). On its own, the app alone gets the strictest Pod Security level: a pod that may run as root, escalate privileges, keep a Linux capability or run without the runtime's seccomp profile is refused, so every pod template in the chart sets all four. The check is on pods, not Deployments: a template that breaks it is accepted, and the refusal shows only in its ReplicaSet's events. ArgoCD creates the namespace, not Terraform, because unlike `monitoring` and `jenkins` it holds no volumes for the destroy to wait on |
+| Pods spread by node with `DoNotSchedule`, by zone with `ScheduleAnyway`, both with `nodeTaintsPolicy: Honor` | By node, strictly: the cluster autoscaler can always satisfy it, since a new node is a new place to go. By zone, as a preference only: one autoscaling group spans both zones and AWS picks the zone of a new node, so a strict zone rule could leave a pod pending while the autoscaler adds nodes on the wrong side. `Honor` matters because the Jenkins node would otherwise count as a node holding none of the app's pods - the spread could never even out, and the third backend pod would never schedule |
 | Kubernetes/Helm providers authenticate through `aws eks get-token`, not `aws_eks_cluster_auth` | That data source resolves once per plan and is stored in state, so the next run configures the provider with a token minted hours earlier. EKS tokens live 15 minutes |
 | The SNS topics carry no KMS key | The AWS managed key for SNS grants use to IAM principals only - CloudWatch and Budgets cannot publish through it, and their notifications would fail silently. A customer managed key would cost a dollar a month and linger for a week after every destroy. The messages carry alarm names, not data |
 | `aws_route53_record.cert_validation` sets `allow_overwrite` | A stale validation record from a previous certificate in the same zone would otherwise block the apply |
@@ -343,14 +356,42 @@ Decisions that are not obvious from reading the code, and that something depends
 | Two webhook signing secrets are in Terraform state | Unavoidable: Terraform hands the same value to GitHub and to the receiver, and an ephemeral value cannot reach an ordinary resource argument. Everything else it generates is written with a write-only argument and never recorded — see [State](#state) |
 | The domain must already be a delegated Route53 zone | Terraform looks the zone up rather than creating it; a zone created in the same apply would not be delegated, and certificate validation would wait on DNS nobody can answer |
 | RDS is single-AZ | `multi_az = true` when uptime beats cost |
-| One NAT gateway, not one per AZ | ~$32/month instead of ~$64. An AZ outage takes egress for both |
-| The sign-in limit is counted per backend pod | The throttler keeps its counts in each pod's memory, so 20 attempts a minute is 20 per pod that receives traffic: 30 to 40 got through in tests with three pods, and up to 200 could at ten. A shared store such as Redis would make it one count |
+| A volume belongs to one zone | Jenkins, Prometheus, Grafana, Alertmanager and Loki keep their data on EBS, and an EBS volume exists in one availability zone only. If that zone goes down, the autoscaling group replaces the node in the other zone - but the pod cannot follow its disk, and stays `Pending` until the zone returns. EFS, which spans zones, would remove this at a cost. For Jenkins there is a manual way out: [If a zone goes down](#if-a-zone-goes-down) |
+| Redis is one pod, without a disk | A restart resets the counts, and until it answers again each backend pod counts on its own - for that minute the sign-in limit is per pod, as it was before Redis. Counts that live a minute are not worth a replicated store |
 | S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
 | No control-plane metrics | EKS doesn't expose them. They come from CloudWatch instead |
 | CI lives in the cluster it deploys to | A broken cluster is a broken CI, and a push while the stack is down is neither built nor scanned until the next apply. The trade for elastic build capacity and one way of running everything |
+| trivy-operator does not see the build pod's tools | A build pod lives two or three minutes and is gone before the operator's scan of it finishes, and its report goes with it. The tools are pinned, so they change only in a commit - check them with a local `trivy image` when bumping one. On 2026-10-13 that showed the agent at 12 critical findings and promtool at 4, fixed by newer versions |
 | Build history dies with the environment | JENKINS_HOME is a volume the destroy takes. The configuration is code, so a rebuild returns an identical Jenkins - with an empty history |
+| `keep-off-the-database` is applied per namespace, by a list in `network-policy.tf` | A NetworkPolicy cannot span namespaces, so a namespace added later reaches the database until it joins the list. Pods on the host network - the node's own agents, such as `aws-node` and node-exporter - are outside every NetworkPolicy and still reach it, as the nodes do. And a new pod is not covered for its first seconds: in the CNI's standard mode a pod starts open and its policies arrive a moment later - a probe started with the pod reached the database on 2026-10-13, the same probe half a minute later did not. Strict mode closes that window, but it also starts pods closed in namespaces with no policy, which took down the EBS CSI driver when it was tried |
+| The cluster API answers one IP | If your address changes while the stack is up, Terraform can no longer reach the cluster to refresh it. `terraform apply -target=aws_eks_cluster.main` updates the allowlist first (it talks to AWS, not to the cluster); a plain apply or destroy works after it |
 | ECR repository names are fixed strings, not derived from `project_name` | The Jenkinsfile names the same repositories, and nothing passes the Terraform value to it. Renaming the project means editing both |
+
+### If a zone goes down
+
+**Expected procedure, not yet tested.** Jenkins' disk is in the dead zone, so `jenkins-0` cannot start on the replacement node. Giving it a new, empty disk in the surviving zone costs only the build history - the configuration is code, and JCasC rebuilds it.
+
+The Jenkins chart creates its volume claim (PVC) as a separate object, not from the StatefulSet, so nothing recreates it once it is deleted. Keep its definition first:
+
+```bash
+# 1. Save the claim, then delete from the file everything tied to the old disk:
+#    status, spec.volumeName, metadata.uid, metadata.resourceVersion,
+#    metadata.creationTimestamp, metadata.finalizers, and the
+#    pv.kubernetes.io/* and volume.kubernetes.io/* annotations
+kubectl get pvc jenkins -n jenkins -o yaml > jenkins-pvc.yaml
+
+# 2. The node is gone, so nothing will confirm the pod's deletion
+kubectl delete pod jenkins-0 -n jenkins --force --grace-period=0
+
+# 3. Release the claim on the old disk
+kubectl delete pvc jenkins -n jenkins
+
+# 4. Same name and the same Helm labels, so the next apply still owns it
+kubectl apply -f jenkins-pvc.yaml
+```
+
+The StatefulSet then starts `jenkins-0` again. The only Jenkins node is in the surviving zone, so the new disk is created there, and the five-minute poll starts the first build. The old disk is deleted by the CSI driver once its zone answers again. The monitoring volumes can be released the same way, losing their history, or left to wait for the zone.
 
 ---
 

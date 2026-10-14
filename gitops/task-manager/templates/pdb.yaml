@@ -1,0 +1,16 @@
+{{- range $app := list "backend" "frontend" }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $app }}
+  labels:
+    app: {{ $app }}
+    {{- include "task-manager.labels" $ | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app: {{ $app }}
+{{- end }}

@@ -268,6 +268,28 @@ resource "helm_release" "ingress_nginx" {
 
   values = [yamlencode({
     controller = {
+      replicaCount = 2
+
+      topologySpreadConstraints = [
+        for spread in [
+          { key = "kubernetes.io/hostname", when = "DoNotSchedule" },
+          { key = "topology.kubernetes.io/zone", when = "ScheduleAnyway" },
+          ] : {
+          maxSkew           = 1
+          topologyKey       = spread.key
+          whenUnsatisfiable = spread.when
+          nodeTaintsPolicy  = "Honor"
+          labelSelector = {
+            matchLabels = {
+              "app.kubernetes.io/name"      = "ingress-nginx"
+              "app.kubernetes.io/instance"  = "ingress-nginx"
+              "app.kubernetes.io/component" = "controller"
+            }
+          }
+          matchLabelKeys = ["pod-template-hash"]
+        }
+      ]
+
       service = {
         type = "LoadBalancer"
         annotations = {
@@ -532,19 +554,22 @@ resource "helm_release" "argocd_app" {
           path           = "gitops/task-manager"
           helm = {
             valueFiles = ["values.yaml", "values-images.yaml"]
-            parameters = [
+            parameters = concat([
               { name = "config.dbHost", value = aws_db_instance.postgres.address },
               { name = "config.appUrl", value = local.app_url },
               { name = "secrets.awsRegion", value = var.aws_region },
               { name = "secrets.awsSecretName", value = aws_db_instance.postgres.master_user_secret[0].secret_arn },
               { name = "secrets.jwtSecretName", value = aws_secretsmanager_secret.jwt_secret.name },
+              { name = "secrets.redisSecretName", value = aws_secretsmanager_secret.redis_auth.name },
               { name = "secrets.appDbSecretName", value = aws_secretsmanager_secret.app_db_user.name },
               { name = "secrets.dbMonitorSecretName", value = aws_secretsmanager_secret.db_monitor.name },
               { name = "secrets.googleSecretName", value = data.aws_secretsmanager_secret.app.name },
               { name = "backend.image.repository", value = aws_ecr_repository.backend.repository_url },
               { name = "frontend.image.repository", value = aws_ecr_repository.frontend.repository_url },
               { name = "ingress.host", value = local.app_fqdn },
-            ]
+              ], [
+              for i, cidr in local.db_subnet_cidrs : { name = "networkPolicy.databaseCidrs[${i}]", value = cidr }
+            ])
           }
         }
 

@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { collectDefaultMetrics, Histogram, Registry } from '@prometheus-io/client';
+import {
+  collectDefaultMetrics,
+  Histogram,
+  Registry,
+} from '@prometheus-io/client';
 
 @Injectable()
 export class MetricsService {

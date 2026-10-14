@@ -1,0 +1,116 @@
+{{- if include "task-manager.redisEnabled" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    app: redis
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          args: ["/etc/redis/redis.conf"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: {{ .Values.redis.port }}
+              name: redis
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/redis
+              readOnly: true
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          secret:
+            secretName: redis-auth
+            defaultMode: 0440
+            items:
+              - key: redis.conf
+                path: redis.conf
+        - name: data
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    app: redis
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.redis.port }}
+      targetPort: redis
+      protocol: TCP
+      name: redis
+  selector:
+    app: redis
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: redis-auth
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  labels:
+    {{- include "task-manager.labels" . | nindent 4 }}
+spec:
+  refreshInterval: {{ .Values.secrets.refreshInterval }}
+  secretStoreRef:
+    name: app-secretstore
+    kind: SecretStore
+  target:
+    name: redis-auth
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        password: "{{`{{ .password }}`}}"
+        redis.conf: |
+          requirepass {{`{{ .password }}`}}
+          save ""
+          appendonly no
+          maxmemory {{ .Values.redis.maxMemory }}
+          maxmemory-policy allkeys-lru
+  data:
+    - secretKey: password
+      remoteRef:
+        key: {{ required "secrets.redisSecretName is required (Terraform passes it as an ArgoCD helm parameter)" .Values.secrets.redisSecretName }}
+{{- end }}
