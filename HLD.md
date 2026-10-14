@@ -356,6 +356,7 @@ Decisions that are not obvious from reading the code, and that something depends
 | Two webhook signing secrets are in Terraform state | Unavoidable: Terraform hands the same value to GitHub and to the receiver, and an ephemeral value cannot reach an ordinary resource argument. Everything else it generates is written with a write-only argument and never recorded — see [State](#state) |
 | The domain must already be a delegated Route53 zone | Terraform looks the zone up rather than creating it; a zone created in the same apply would not be delegated, and certificate validation would wait on DNS nobody can answer |
 | RDS is single-AZ | `multi_az = true` when uptime beats cost |
+| A volume belongs to one zone | Jenkins, Prometheus, Grafana, Alertmanager and Loki keep their data on EBS, and an EBS volume exists in one availability zone only. If that zone goes down, the autoscaling group replaces the node in the other zone - but the pod cannot follow its disk, and stays `Pending` until the zone returns. EFS, which spans zones, would remove this at a cost. For Jenkins there is a manual way out: [If a zone goes down](#if-a-zone-goes-down) |
 | Redis is one pod, without a disk | A restart resets the counts, and until it answers again each backend pod counts on its own - for that minute the sign-in limit is per pod, as it was before Redis. Counts that live a minute are not worth a replicated store |
 | S3 gateway endpoint only, no interface endpoints | ECR API, STS, Secrets Manager and EC2 calls still use the NAT. Interface endpoints cost ~$7/month each per AZ, more than the NAT |
 | Helm add-ons install serially | Required — the provider shares one repo cache and concurrent installs fail |
@@ -366,6 +367,31 @@ Decisions that are not obvious from reading the code, and that something depends
 | `keep-off-the-database` is applied per namespace, by a list in `network-policy.tf` | A NetworkPolicy cannot span namespaces, so a namespace added later reaches the database until it joins the list. Pods on the host network - the node's own agents, such as `aws-node` and node-exporter - are outside every NetworkPolicy and still reach it, as the nodes do. And a new pod is not covered for its first seconds: in the CNI's standard mode a pod starts open and its policies arrive a moment later - a probe started with the pod reached the database on 2026-10-13, the same probe half a minute later did not. Strict mode closes that window, but it also starts pods closed in namespaces with no policy, which took down the EBS CSI driver when it was tried |
 | The cluster API answers one IP | If your address changes while the stack is up, Terraform can no longer reach the cluster to refresh it. `terraform apply -target=aws_eks_cluster.main` updates the allowlist first (it talks to AWS, not to the cluster); a plain apply or destroy works after it |
 | ECR repository names are fixed strings, not derived from `project_name` | The Jenkinsfile names the same repositories, and nothing passes the Terraform value to it. Renaming the project means editing both |
+
+### If a zone goes down
+
+**Expected procedure, not yet tested.** Jenkins' disk is in the dead zone, so `jenkins-0` cannot start on the replacement node. Giving it a new, empty disk in the surviving zone costs only the build history - the configuration is code, and JCasC rebuilds it.
+
+The Jenkins chart creates its volume claim (PVC) as a separate object, not from the StatefulSet, so nothing recreates it once it is deleted. Keep its definition first:
+
+```bash
+# 1. Save the claim, then delete from the file everything tied to the old disk:
+#    status, spec.volumeName, metadata.uid, metadata.resourceVersion,
+#    metadata.creationTimestamp, metadata.finalizers, and the
+#    pv.kubernetes.io/* and volume.kubernetes.io/* annotations
+kubectl get pvc jenkins -n jenkins -o yaml > jenkins-pvc.yaml
+
+# 2. The node is gone, so nothing will confirm the pod's deletion
+kubectl delete pod jenkins-0 -n jenkins --force --grace-period=0
+
+# 3. Release the claim on the old disk
+kubectl delete pvc jenkins -n jenkins
+
+# 4. Same name and the same Helm labels, so the next apply still owns it
+kubectl apply -f jenkins-pvc.yaml
+```
+
+The StatefulSet then starts `jenkins-0` again. The only Jenkins node is in the surviving zone, so the new disk is created there, and the five-minute poll starts the first build. The old disk is deleted by the CSI driver once its zone answers again. The monitoring volumes can be released the same way, losing their history, or left to wait for the zone.
 
 ---
 
