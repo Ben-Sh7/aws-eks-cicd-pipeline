@@ -102,6 +102,12 @@ spec:
         }
     }
 
+    options {
+        // A second build waits for the first instead of building the same missing image
+        // and failing to push it: ECR tags are immutable.
+        disableConcurrentBuilds()
+    }
+
     environment {
         AWS_REGION = 'us-east-1'
         BACKEND_REPO = 'devops-task-manager-backend'
@@ -260,8 +266,8 @@ spec:
                         for item in ${TO_BUILD}; do
                             app=${item%%:*}
                             case ${app} in
-                                backend) repo=${BACKEND_REPO} ;;
-                                frontend) repo=${FRONTEND_REPO} ;;
+                                (backend) repo=${BACKEND_REPO} ;;
+                                (frontend) repo=${FRONTEND_REPO} ;;
                             esac
                             crane push ${WORKSPACE}/${app}.tar ${ECR_REGISTRY}/${repo}:${item#*:}
                         done
