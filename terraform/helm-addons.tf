@@ -293,11 +293,13 @@ resource "helm_release" "ingress_nginx" {
       service = {
         type = "LoadBalancer"
         annotations = {
-          "service.beta.kubernetes.io/aws-load-balancer-ssl-cert"                 = aws_acm_certificate_validation.main.certificate_arn
-          "service.beta.kubernetes.io/aws-load-balancer-ssl-ports"                = "https"
-          "service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy"   = "ELBSecurityPolicy-TLS-1-2-2017-01"
-          "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"         = "http"
-          "service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags" = "Project=${local.common_tags.Project},Environment=${local.common_tags.Environment},ManagedBy=${local.common_tags.ManagedBy},CreatedBy=${local.common_tags.CreatedBy}"
+          "service.beta.kubernetes.io/aws-load-balancer-ssl-cert"                          = aws_acm_certificate_validation.main.certificate_arn
+          "service.beta.kubernetes.io/aws-load-balancer-ssl-ports"                         = "https"
+          "service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy"            = "ELBSecurityPolicy-TLS-1-2-2017-01"
+          "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"                  = "http"
+          "service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags"          = "Project=${local.common_tags.Project},Environment=${local.common_tags.Environment},ManagedBy=${local.common_tags.ManagedBy},CreatedBy=${local.common_tags.CreatedBy}"
+          "service.beta.kubernetes.io/aws-load-balancer-target-node-labels"                = "eks.amazonaws.com/nodegroup=${aws_eks_node_group.main.node_group_name}"
+          "service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled" = "true"
         }
         targetPorts = {
           https = "http"
