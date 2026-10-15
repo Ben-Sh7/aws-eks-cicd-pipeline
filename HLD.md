@@ -104,7 +104,7 @@ That credential belongs to a Google project, not to this infrastructure, so Terr
 
 ## Key flows
 
-**CI** — push → build → Trivy scan → push to ECR under the commit's own tag → bump the tag file → commit
+**CI** — push → build what changed → Trivy scan → push to ECR under the commit's own tag → bump the tag file → commit
 
 **CD** — webhook → merge the values files → sync the chart → Kubernetes rolls out
 
@@ -131,7 +131,8 @@ It acts on the difference, not on a file changing.
 
 <br>
 
-A tag is `1a2b3c4`, the short hash of the commit it was built from. A build counter cannot
+A tag is `1a2b3c4`, the short hash of the last commit that changed that image's folder -
+`app/backend` or `app/frontend`. Each image has its own. A build counter cannot
 work here: `terraform destroy` takes Jenkins and its history with it, so the next cycle
 starts at 1 and hands out tags that already mean a different commit. That is what broke the
 first build after a rebuild.
@@ -140,8 +141,8 @@ Unique tags let the repositories be `IMMUTABLE`. A tag can never be repointed, s
 image is provably the one Trivy scanned. `latest` and `v1` go with them — nothing consumed
 them, and a moving tag cannot exist in such a repository.
 
-Building the same commit twice is then a no-op rather than a failure: the pipeline reuses the
-image ECR already has, and leaves the tag file alone when it already names that commit.
+Building the same commit twice is then a no-op rather than a failure: the pipeline reuses any
+image ECR already has, and leaves the tag file alone when it already names both commits.
 
 </details>
 
@@ -408,6 +409,7 @@ Its four secrets - the admin username and password, the webhook signing secret a
 |---|---|
 | Images are built with **BuildKit**, not `docker build` | There is no Docker daemon on the nodes, and mounting one into a build would hand every build root on the host. Kaniko, the usual alternative, was archived by Google in 2025 |
 | The build writes a **file first**, and pushes only after Trivy passes | The gate this project had from the start: a fixable HIGH or CRITICAL never reaches ECR. Pushing first and deleting after would be a weaker promise |
+| Each image is tagged with the **last commit that changed its own folder** | A frontend-only change builds, scans and rolls out the frontend only; the backend keeps the image it runs. Both tags still sit in one values file, so reverting a deploy commit moves them back together |
 | The agent pod carries **one container per tool** | Each tool is a pinned upstream image - the AWS CLI, Helm, promtool, Trivy, BuildKit - instead of one image of our own that would have to be built before it could build anything |
 | ECR credentials come from the **pod's own identity** | The AWS CLI container mints a registry token with its IRSA role and writes it where BuildKit reads it. No key exists to leak |
 | The controller is reached **through the ingress**, with the same certificate as the app | It used to be a public IP on port 8080 with no TLS. The source-range limit the security group enforced is now an ingress annotation: GitHub's webhook ranges, plus whoever runs the apply |
