@@ -120,12 +120,12 @@ prometheusRule:
 # which route was slow and why.
 serviceMonitor:
   enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
 
 alerts:
   # 95th percentile request time, in seconds, that counts as too slow.
   p95LatencySeconds: 1
-  interval: 30s
-  scrapeTimeout: 10s
 
 # Keeps the sign-in and request counts, so every backend pod enforces one
 # limit instead of a limit each. Nothing in it outlives a minute, so there is no
