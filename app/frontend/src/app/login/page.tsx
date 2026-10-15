@@ -29,7 +29,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
       <div className="w-full max-w-sm rounded-2xl bg-white p-8 text-center shadow-lg">
         <h1 className="text-2xl font-semibold">Task Manager</h1>
         <p className="mt-2 text-sm text-slate-500">
-          Sign in to see and organize your tasks.
+          Sign in to plan, track and finish your tasks.
         </p>
 
         {message && (
