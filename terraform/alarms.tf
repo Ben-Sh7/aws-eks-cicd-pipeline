@@ -153,8 +153,11 @@ resource "aws_cloudwatch_metric_alarm" "rds" {
   tags          = local.common_tags
 }
 
-# The ALB reports to CloudWatch, not to Prometheus, so the alerts on what the
-# load balancer sees live here. The controller creates the ALB; this finds it by
+# The ALB reports to CloudWatch, not to Prometheus, so the alerts on the errors
+# the load balancer sees live here. Whether the site answers at all is the
+# blackbox probe's job (TaskManagerUnreachable in the chart): a traffic count
+# has no data on a new ALB, and an alarm that counts that as a breach fires on
+# every apply. The controller creates the ALB; this finds it by
 # the tags it puts on everything it makes, once the webhook Ingress has an address.
 data "aws_lb" "ingress" {
   tags = {
@@ -211,25 +214,6 @@ resource "aws_cloudwatch_metric_alarm" "alb_own_errors" {
   evaluation_periods  = 2
   treat_missing_data  = "notBreaching"
   dimensions          = { LoadBalancer = data.aws_lb.ingress.arn_suffix }
-
-  alarm_actions = [aws_sns_topic.alerts.arn]
-  ok_actions    = [aws_sns_topic.alerts.arn]
-  tags          = local.common_tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "alb_no_traffic" {
-  alarm_name          = "${local.project_name}-alb-no-traffic"
-  alarm_description   = "No request reached a pod through the load balancer in thirty minutes - not even the blackbox probe, which calls every minute. Either nobody can reach the site or it is gone."
-  namespace           = "AWS/ApplicationELB"
-  metric_name         = "RequestCount"
-  comparison_operator = "LessThanThreshold"
-  threshold           = 1
-  statistic           = "Sum"
-  period              = 900
-  evaluation_periods  = 2
-  # CloudWatch records nothing at all for a period without requests.
-  treat_missing_data = "breaching"
-  dimensions         = { LoadBalancer = data.aws_lb.ingress.arn_suffix }
 
   alarm_actions = [aws_sns_topic.alerts.arn]
   ok_actions    = [aws_sns_topic.alerts.arn]

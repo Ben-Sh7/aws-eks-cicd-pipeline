@@ -77,4 +77,15 @@ spec:
           annotations:
             summary: The backend is failing more than 5% of its requests
             description: Counted by the backend itself, so it fires for calls the frontend makes internally as well as ones a visitor made.
+
+    - name: task-manager.reachability
+      rules:
+        - alert: TaskManagerUnreachable
+          expr: max(probe_success{target="app"}) == 0
+          for: 20m
+          labels:
+            severity: critical
+          annotations:
+            summary: The site has not answered from outside for twenty minutes
+            description: The blackbox probe takes a visitor's way in - public DNS, the ALB, WAF, the frontend - and none of its calls got a 2xx. Twenty minutes leave room for a fresh apply, where the app waits for its first build.
 {{- end }}
