@@ -70,13 +70,16 @@ spec:
     - Ingress
     - Egress
   ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
-      ports:
+    - ports:
         - port: {{ .Values.frontend.port }}
           protocol: TCP
+      {{- with .Values.networkPolicy.loadBalancerCidrs }}
+      from:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      {{- end }}
   egress:
     - to:
         - podSelector:

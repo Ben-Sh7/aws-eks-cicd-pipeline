@@ -157,7 +157,7 @@ Open the app and **create an account with a username and password**.
 - A session is a 15-minute access token plus a refresh token that rotates on every use, both in `httpOnly` cookies the page's JavaScript cannot read
 - Reusing an already-rotated refresh token counts as theft and ends every session of that account
 
-> **The deployed app runs over HTTPS.** TLS terminates on the load balancer with an ACM certificate AWS renews on its own, and plain HTTP is redirected. The private key is never issued to anyone, this project included.
+> **The deployed app runs over HTTPS.** TLS terminates on the ALB with an ACM certificate AWS renews on its own, and plain HTTP is redirected. The private key is never issued to anyone, this project included.
 
 ### Google sign-in
 
@@ -251,7 +251,7 @@ Running the whole stack on your own machine is a convenience, not part of the de
 | **CI** | Jenkins in-cluster + BuildKit + Trivy |
 | **CD** | ArgoCD (GitOps, pull-based) |
 | **Secrets** | External Secrets Operator + IRSA |
-| **Ingress** | ingress-nginx |
+| **Ingress** | AWS Load Balancer Controller → ALB · WAF |
 | **Monitoring** | Prometheus · Grafana · Alertmanager · Loki |
 | **Security** | GuardDuty · EKS audit log · trivy-operator |
 

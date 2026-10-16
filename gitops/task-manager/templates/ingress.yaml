@@ -6,11 +6,10 @@ metadata:
   labels:
     app: task-manager
     {{- include "task-manager.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
   annotations:
-    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
-    {{- if .Values.ingress.forceSslRedirect }}
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    {{- end }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:

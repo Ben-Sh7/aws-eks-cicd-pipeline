@@ -23,7 +23,6 @@ locals {
   namespaces_kept_off_the_database = toset([
     "default",
     "kube-system",
-    helm_release.ingress_nginx.namespace,
     helm_release.external_secrets.namespace,
     kubernetes_namespace.monitoring.metadata[0].name,
     helm_release.argocd.namespace,
