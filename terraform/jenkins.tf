@@ -177,14 +177,19 @@ locals {
 
       jenkinsUrl = "https://${local.jenkins_fqdn}"
 
+      # Only GitHub's webhook ranges and whoever runs the apply get through -
+      # enforced by WAF (waf.tf). /login is the one page that answers 200 to
+      # an anonymous health check; / answers 403.
       ingress = {
         enabled          = true
-        ingressClassName = "nginx"
+        ingressClassName = "alb"
         hostName         = local.jenkins_fqdn
+        path             = "/"
+        pathType         = "Prefix"
 
-        annotations = {
-          "nginx.ingress.kubernetes.io/whitelist-source-range" = join(",", concat(local.github_hook_cidrs, local.operator_cidrs))
-        }
+        annotations = merge(local.alb_group_annotations, {
+          "alb.ingress.kubernetes.io/healthcheck-path" = "/login"
+        })
       }
 
       nodeSelector = { workload = local.jenkins_workload }
@@ -365,7 +370,7 @@ resource "helm_release" "jenkins" {
   depends_on = [
     aws_eks_node_group.jenkins,
     kubernetes_storage_class.gp3_tagged,
-    helm_release.ingress_nginx,
+    helm_release.aws_load_balancer_controller,
     helm_release.external_secrets,
     aws_secretsmanager_secret_version.jenkins_admin,
     aws_secretsmanager_secret_version.jenkins_webhook,

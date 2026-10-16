@@ -142,10 +142,16 @@ variable "node_disk_size" {
   default     = 20
 }
 
-variable "ingress_nginx_chart_version" {
-  description = "Pinned ingress-nginx Helm chart version"
+variable "aws_load_balancer_controller_chart_version" {
+  description = "Pinned aws-load-balancer-controller Helm chart version. From v3 the chart and the controller share a version number. The IAM policy in policies/ is the one AWS publishes for this version - bump the two together."
   type        = string
-  default     = "4.11.3"
+  default     = "3.5.0"
+}
+
+variable "waf_rate_limit" {
+  description = "Requests one IP address may send in any five minutes before WAF blocks it, until its rate drops again. Opening a page is about fifteen requests, so a person never comes close; a flood does within seconds."
+  type        = number
+  default     = 2000
 }
 
 variable "prometheus_operator_crds_chart_version" {

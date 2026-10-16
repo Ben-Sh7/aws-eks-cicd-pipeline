@@ -23,10 +23,13 @@ resource "kubernetes_ingress_v1" "argocd_webhook" {
   metadata {
     name      = "argocd-webhook"
     namespace = "argocd"
-    annotations = {
-      "nginx.ingress.kubernetes.io/backend-protocol"       = "HTTPS"
-      "nginx.ingress.kubernetes.io/whitelist-source-range" = join(",", local.github_hook_cidrs)
-    }
+    # Only GitHub may reach this host - enforced by WAF (waf.tf). argocd-server
+    # serves HTTPS only, with a certificate of its own the ALB does not check.
+    annotations = merge(local.alb_group_annotations, {
+      "alb.ingress.kubernetes.io/backend-protocol"     = "HTTPS"
+      "alb.ingress.kubernetes.io/healthcheck-protocol" = "HTTPS"
+      "alb.ingress.kubernetes.io/healthcheck-path"     = "/healthz"
+    })
     labels = {
       "app.kubernetes.io/part-of"    = "argocd"
       "app.kubernetes.io/managed-by" = "terraform"
@@ -34,7 +37,7 @@ resource "kubernetes_ingress_v1" "argocd_webhook" {
   }
 
   spec {
-    ingress_class_name = "nginx"
+    ingress_class_name = "alb"
 
     rule {
       host = local.argocd_fqdn
@@ -57,5 +60,9 @@ resource "kubernetes_ingress_v1" "argocd_webhook" {
     }
   }
 
-  depends_on = [helm_release.argocd, helm_release.ingress_nginx]
+  # Terraform waits for the ALB's address here; dns.tf points the three names
+  # at it. The app and Jenkins join the same ALB, so this one is enough.
+  wait_for_load_balancer = true
+
+  depends_on = [helm_release.argocd, terraform_data.load_balancer_cleanup_gate]
 }

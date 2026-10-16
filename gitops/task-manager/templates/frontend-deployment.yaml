@@ -63,6 +63,13 @@ spec:
               optional: true
         - name: HOSTNAME
           value: "0.0.0.0"
+        # The ALB sends to a pod straight by its address and keeps doing so for
+        # a few seconds after Kubernetes begins stopping it. Waiting first lets
+        # the ALB take it out of rotation before the server exits.
+        lifecycle:
+          preStop:
+            sleep:
+              seconds: 15
         resources:
           {{- toYaml .Values.frontend.resources | nindent 10 }}
         livenessProbe:

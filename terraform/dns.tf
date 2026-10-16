@@ -10,7 +10,9 @@ data "aws_route53_zone" "main" {
   }
 }
 
-data "aws_elb_hosted_zone_id" "main" {}
+data "aws_lb_hosted_zone_id" "main" {
+  load_balancer_type = "application"
+}
 
 locals {
   app_fqdn     = var.app_subdomain == "" ? local.domain_name : "${var.app_subdomain}.${local.domain_name}"
@@ -58,17 +60,8 @@ resource "aws_acm_certificate_validation" "main" {
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
-data "kubernetes_service" "ingress_nginx" {
-  metadata {
-    name      = "ingress-nginx-controller"
-    namespace = "ingress-nginx"
-  }
-
-  depends_on = [helm_release.ingress_nginx]
-}
-
 locals {
-  ingress_lb_hostname = data.kubernetes_service.ingress_nginx.status[0].load_balancer[0].ingress[0].hostname
+  ingress_lb_hostname = kubernetes_ingress_v1.argocd_webhook.status[0].load_balancer[0].ingress[0].hostname
 }
 
 resource "aws_route53_record" "app" {
@@ -78,7 +71,7 @@ resource "aws_route53_record" "app" {
 
   alias {
     name                   = local.ingress_lb_hostname
-    zone_id                = data.aws_elb_hosted_zone_id.main.id
+    zone_id                = data.aws_lb_hosted_zone_id.main.id
     evaluate_target_health = false
   }
 }
@@ -90,7 +83,7 @@ resource "aws_route53_record" "argocd" {
 
   alias {
     name                   = local.ingress_lb_hostname
-    zone_id                = data.aws_elb_hosted_zone_id.main.id
+    zone_id                = data.aws_lb_hosted_zone_id.main.id
     evaluate_target_health = false
   }
 }
@@ -102,7 +95,7 @@ resource "aws_route53_record" "jenkins" {
 
   alias {
     name                   = local.ingress_lb_hostname
-    zone_id                = data.aws_elb_hosted_zone_id.main.id
+    zone_id                = data.aws_lb_hosted_zone_id.main.id
     evaluate_target_health = false
   }
 }

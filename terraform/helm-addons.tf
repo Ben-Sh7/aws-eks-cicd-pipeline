@@ -257,76 +257,6 @@ resource "helm_release" "prometheus_operator_crds" {
   depends_on = [aws_eks_node_group.main]
 }
 
-resource "helm_release" "ingress_nginx" {
-  name             = "ingress-nginx"
-  repository       = "https://kubernetes.github.io/ingress-nginx"
-  chart            = "ingress-nginx"
-  version          = var.ingress_nginx_chart_version
-  namespace        = "ingress-nginx"
-  create_namespace = true
-  timeout          = 600
-
-  values = [yamlencode({
-    controller = {
-      replicaCount = 2
-
-      topologySpreadConstraints = [
-        for spread in [
-          { key = "kubernetes.io/hostname", when = "DoNotSchedule" },
-          { key = "topology.kubernetes.io/zone", when = "ScheduleAnyway" },
-          ] : {
-          maxSkew           = 1
-          topologyKey       = spread.key
-          whenUnsatisfiable = spread.when
-          nodeTaintsPolicy  = "Honor"
-          labelSelector = {
-            matchLabels = {
-              "app.kubernetes.io/name"      = "ingress-nginx"
-              "app.kubernetes.io/instance"  = "ingress-nginx"
-              "app.kubernetes.io/component" = "controller"
-            }
-          }
-          matchLabelKeys = ["pod-template-hash"]
-        }
-      ]
-
-      service = {
-        type = "LoadBalancer"
-        annotations = {
-          "service.beta.kubernetes.io/aws-load-balancer-ssl-cert"                          = aws_acm_certificate_validation.main.certificate_arn
-          "service.beta.kubernetes.io/aws-load-balancer-ssl-ports"                         = "https"
-          "service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy"            = "ELBSecurityPolicy-TLS-1-2-2017-01"
-          "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"                  = "http"
-          "service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags"          = "Project=${local.common_tags.Project},Environment=${local.common_tags.Environment},ManagedBy=${local.common_tags.ManagedBy},CreatedBy=${local.common_tags.CreatedBy}"
-          "service.beta.kubernetes.io/aws-load-balancer-target-node-labels"                = "eks.amazonaws.com/nodegroup=${aws_eks_node_group.main.node_group_name}"
-          "service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled" = "true"
-        }
-        targetPorts = {
-          https = "http"
-        }
-      }
-
-      config = {
-        use-forwarded-headers = "true"
-        proxy-real-ip-cidr    = var.vpc_cidr
-      }
-
-      metrics = {
-        enabled = true
-        serviceMonitor = {
-          enabled = true
-        }
-      }
-    }
-  })]
-
-  depends_on = [
-    aws_eks_node_group.main,
-    aws_acm_certificate_validation.main,
-    helm_release.prometheus_operator_crds,
-  ]
-}
-
 resource "helm_release" "external_secrets" {
   name             = "external-secrets"
   repository       = "https://charts.external-secrets.io"
@@ -349,7 +279,7 @@ resource "helm_release" "external_secrets" {
   depends_on = [
     aws_eks_node_group.main,
     aws_iam_openid_connect_provider.eks,
-    helm_release.ingress_nginx,
+    helm_release.aws_load_balancer_controller,
   ]
 }
 
@@ -550,6 +480,11 @@ resource "helm_release" "argocd_app" {
         namespace = "argocd"
         project   = "default"
 
+        # Deleting the Application deletes what it deployed - above all the
+        # app's Ingress, so the controller can remove the ALB before the destroy
+        # removes the controller (see load_balancer_cleanup_gate).
+        finalizers = ["resources-finalizer.argocd.argoproj.io"]
+
         source = {
           repoURL        = "https://github.com/${local.github_repo}.git"
           targetRevision = var.gitops_revision
@@ -571,7 +506,19 @@ resource "helm_release" "argocd_app" {
               { name = "ingress.host", value = local.app_fqdn },
               ], [
               for i, cidr in local.db_subnet_cidrs : { name = "networkPolicy.databaseCidrs[${i}]", value = cidr }
+              ], [
+              for i, cidr in local.alb_subnet_cidrs : { name = "networkPolicy.loadBalancerCidrs[${i}]", value = cidr }
             ])
+
+            # The same group settings Jenkins and the webhook use, from one map,
+            # so the three Ingresses on the ALB cannot disagree.
+            valuesObject = {
+              ingress = {
+                annotations = merge(local.alb_group_annotations, {
+                  "alb.ingress.kubernetes.io/healthcheck-path" = "/api/health"
+                })
+              }
+            }
           }
         }
 
@@ -589,6 +536,9 @@ resource "helm_release" "argocd_app" {
           managedNamespaceMetadata = {
             labels = {
               "pod-security.kubernetes.io/enforce" = "restricted"
+              # A new pod counts as ready only once the ALB reports it healthy,
+              # so a rolling update never takes the old pods away first.
+              "elbv2.k8s.aws/pod-readiness-gate-inject" = "enabled"
             }
           }
         }
@@ -596,5 +546,5 @@ resource "helm_release" "argocd_app" {
     }
   })]
 
-  depends_on = [helm_release.argocd]
+  depends_on = [helm_release.argocd, terraform_data.load_balancer_cleanup_gate]
 }

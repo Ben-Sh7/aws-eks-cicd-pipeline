@@ -77,28 +77,4 @@ spec:
           annotations:
             summary: The backend is failing more than 5% of its requests
             description: Counted by the backend itself, so it fires for calls the frontend makes internally as well as ones a visitor made.
-
-    - name: task-manager.traffic
-      rules:
-        - alert: TaskManagerHighErrorRate
-          expr: |
-            sum(rate(nginx_ingress_controller_requests{host="{{ .Values.ingress.host }}",status=~"5.."}[5m]))
-              /
-            sum(rate(nginx_ingress_controller_requests{host="{{ .Values.ingress.host }}"}[5m]))
-              > 0.05
-          for: 10m
-          labels:
-            severity: critical
-          annotations:
-            summary: More than 5% of requests are failing
-            description: The pods are up and answering with errors, which no replica count shows.
-
-        - alert: TaskManagerNoTraffic
-          expr: sum(rate(nginx_ingress_controller_requests{host="{{ .Values.ingress.host }}"}[15m])) == 0
-          for: 30m
-          labels:
-            severity: warning
-          annotations:
-            summary: No request has reached the site in thirty minutes
-            description: Either nobody is using it or nobody can. Worth one look.
 {{- end }}

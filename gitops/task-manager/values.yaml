@@ -97,7 +97,7 @@ secrets:
   dbPassword: ""
   jwtSecret: ""
 
-# Locks the namespace down to the one path the app needs: ingress-nginx may
+# Locks the namespace down to the one path the app needs: the load balancer may
 # reach the frontend, the frontend may reach the backend, and only the backend
 # may reach the database. Needs a CNI that enforces policies - Terraform turns
 # that on in the EKS vpc-cni addon. Turn it off for a local install whose CNI
@@ -108,15 +108,20 @@ networkPolicy:
   # and the bootstrap job may open 5432 there and nowhere else. Empty allows
   # 5432 to any address, for a local install whose database has no fixed range.
   databaseCidrs: []
+  # Address ranges the load balancer connects from - on AWS, the public subnets
+  # the ALB lives in, passed in by Terraform. Only these may open the frontend's
+  # port. Empty allows any address, for a local install.
+  loadBalancerCidrs: []
 
 # Alerts on the app itself, evaluated by the Prometheus that Terraform installs.
-# They read kube-state-metrics and the ingress controller rather than the app,
-# so they need nothing from the image.
+# They read kube-state-metrics and the backend's own metrics. The error rate and
+# traffic seen at the load balancer are CloudWatch alarms instead (alarms.tf),
+# because the ALB reports to CloudWatch, not to Prometheus.
 prometheusRule:
   enabled: true
 
-# Scrapes /metrics on the backend itself. The blackbox probe and the ingress
-# controller measure the app from outside; this is the only source that knows
+# Scrapes /metrics on the backend itself. The blackbox probe and the load
+# balancer's metrics measure the app from outside; this is the only source that knows
 # which route was slow and why.
 serviceMonitor:
   enabled: true
@@ -160,11 +165,14 @@ dbBootstrap:
 
 ingress:
   enabled: true
-  className: nginx
+  # alb = the AWS Load Balancer Controller, which builds an ALB from this
+  # Ingress. A local install sets whatever controller it runs.
+  className: alb
   # The hostname the app answers on, passed in by Terraform. Empty = match-all
   # path rule (no hostname restriction), which is what a local minikube install
   # wants.
   host: ""
-  # Send plain HTTP to HTTPS. Only makes sense where a certificate exists -
-  # turn it off for local installs, which have none.
-  forceSslRedirect: true
+  # Controller-specific settings. On AWS, Terraform passes the ALB's: the shared
+  # group, certificate, TLS policy, WAF and HTTP-to-HTTPS redirect - the same
+  # map Jenkins and the ArgoCD webhook use, so the three cannot disagree.
+  annotations: {}
