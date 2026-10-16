@@ -43,6 +43,7 @@ resource "helm_release" "blackbox_exporter" {
         scrapeTimeout = "15s"
       }
       targets = [
+        # The chart's TaskManagerUnreachable alert selects this name.
         {
           name = "app"
           url  = "${local.app_url}/login"
@@ -55,7 +56,10 @@ resource "helm_release" "blackbox_exporter" {
     }
   })]
 
-  depends_on = [helm_release.kube_prometheus_stack]
+  # Probing a name before its record exists gets an empty answer, and the
+  # VPC's resolver keeps that answer for the zone's negative TTL - fifteen
+  # minutes on Route53 - long after the record appears.
+  depends_on = [helm_release.kube_prometheus_stack, aws_route53_record.app]
 }
 
 resource "helm_release" "postgres_exporter" {

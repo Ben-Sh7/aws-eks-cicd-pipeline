@@ -114,9 +114,9 @@ networkPolicy:
   loadBalancerCidrs: []
 
 # Alerts on the app itself, evaluated by the Prometheus that Terraform installs.
-# They read kube-state-metrics and the backend's own metrics. The error rate and
-# traffic seen at the load balancer are CloudWatch alarms instead (alarms.tf),
-# because the ALB reports to CloudWatch, not to Prometheus.
+# They read kube-state-metrics, the backend's own metrics and the blackbox
+# probe. The errors seen at the load balancer are CloudWatch alarms instead
+# (alarms.tf), because the ALB reports to CloudWatch, not to Prometheus.
 prometheusRule:
   enabled: true
 
