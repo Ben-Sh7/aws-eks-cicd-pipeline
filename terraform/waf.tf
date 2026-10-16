@@ -1,6 +1,6 @@
 resource "aws_wafv2_ip_set" "jenkins_allowed" {
   name               = "${local.project_name}-jenkins-allowed"
-  description        = "GitHub's webhook ranges plus whoever runs the apply (IPv4)"
+  description        = "GitHub webhook ranges plus whoever runs the apply, IPv4"
   scope              = "REGIONAL"
   ip_address_version = "IPV4"
   addresses          = concat(local.github_hook_cidrs, local.operator_cidrs)
@@ -9,7 +9,7 @@ resource "aws_wafv2_ip_set" "jenkins_allowed" {
 
 resource "aws_wafv2_ip_set" "argocd_allowed" {
   name               = "${local.project_name}-argocd-allowed"
-  description        = "GitHub's webhook ranges (IPv4), read from api.github.com/meta at plan time"
+  description        = "GitHub webhook ranges, IPv4, read from api.github.com/meta at plan time"
   scope              = "REGIONAL"
   ip_address_version = "IPV4"
   addresses          = local.github_hook_cidrs
@@ -42,7 +42,7 @@ locals {
 
 resource "aws_wafv2_web_acl" "main" {
   name        = local.project_name
-  description = "In front of the ALB: tool allowlists, a per-IP rate limit, and AWS's rule groups on the app"
+  description = "In front of the ALB: tool allowlists, a per-IP rate limit, AWS rule groups on the app"
   scope       = "REGIONAL"
 
   default_action {
