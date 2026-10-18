@@ -117,7 +117,9 @@ spec:
         CHART_DIR = 'gitops/task-manager'
         CHART_STUB_VALUES = 'backend.image.repository=ci,backend.image.tag=ci,frontend.image.repository=ci,frontend.image.tag=ci,config.dbHost=ci,config.appUrl=https://ci.invalid,ingress.host=ci.invalid,secrets.awsSecretName=ci,secrets.jwtSecretName=ci,secrets.appDbSecretName=ci,secrets.dbMonitorSecretName=ci,secrets.redisSecretName=ci'
         CI_BOT_NAME = 'jenkins-ci-bot'
-        CI_BOT_EMAIL = 'jenkins-ci-bot@users.noreply.github.com'
+        // Not <name>@users.noreply.github.com: GitHub credits that format to whoever
+        // owns the account of that name - a stranger's, for jenkins-ci-bot.
+        CI_BOT_EMAIL = 'jenkins-ci-bot@ben-sharabi.com'
         BUILDKIT_HOST = 'unix:///run/user/1000/buildkit/buildkitd.sock'
     }
 
