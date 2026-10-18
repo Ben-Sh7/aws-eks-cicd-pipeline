@@ -10,7 +10,7 @@ That split is why a compromised build can't reach production, and why `git rever
 
 ## Architecture
 
-![task-manager AWS architecture: a commit becoming a running pod (1-7), and a user request reaching the database (A-E)](docs/architecture.png)
+![task-manager AWS architecture: a commit becoming a running pod (1-7), and a user request reaching the database (A-D)](docs/architecture.png)
 
 The same system by what each piece does, rather than by where a request goes: the two node groups and what runs in each namespace, what watches them, and which AWS service each one reaches.
 
@@ -29,7 +29,7 @@ Two node groups, all of it in private subnets with no public IP:
 
 The nodes need internet access to pull images. That goes out through a NAT gateway in their own availability zone - one per zone, each private subnet with a route table of its own - so a zone going down does not cut the other zone's way out. ECR image layers skip the NAT: they come from S3, through a free S3 gateway endpoint.
 
-![Inside the cluster: browser to ingress to frontend to backend to database, every hop a ClusterIP Service](docs/inside-the-cluster.png)
+![Inside the cluster: browser to the ALB, straight to a frontend pod, then backend and database through ClusterIP Services; the Ingress and the Service drawn as configuration, not hops](docs/inside-the-cluster.png)
 
 ### One way in
 
